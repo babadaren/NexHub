@@ -57,10 +57,25 @@ export interface AuditLog {
   createdAt: string;
 }
 
+export interface SubscriptionSource {
+  id: string;
+  name: string;
+  url?: string;
+  content?: string;
+  autoRefresh: boolean;
+  refreshCron?: string;
+  lastRefreshStatus?: "never" | "passed" | "warning" | "failed";
+  lastRefreshMessage?: string;
+  lastRefreshAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AppState {
   admins: AdminAccount[];
   nodes: NodeConfig[];
   tests: NodeTestResult[];
   auditLogs: AuditLog[];
+  subscriptions: SubscriptionSource[];
   settings: Record<string, unknown>;
 }

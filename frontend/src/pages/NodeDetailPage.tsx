@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { Copy, QrCode, RefreshCw, Square } from "lucide-react";
+import { Copy, QrCode, RefreshCw, RotateCw, Square } from "lucide-react";
 import { api } from "../api";
-import type { Direction, NodeConfig, NodeTestResult, RealtimePoint } from "../types";
+import type { Direction, NodeConfig, NodeTestResult, RealtimePoint, SharePayload } from "../types";
 import { StatusBadge } from "../components/Status";
 import { TrafficChart } from "../components/Charts";
 
@@ -10,7 +10,7 @@ export function NodeDetailPage({ direction }: { direction: Direction }) {
   const { id } = useParams();
   const [node, setNode] = useState<(NodeConfig & { tests: NodeTestResult[]; realtime: { points: RealtimePoint[] } }) | undefined>();
   const [testing, setTesting] = useState(false);
-  const [share, setShare] = useState<string | undefined>();
+  const [share, setShare] = useState<SharePayload | undefined>();
 
   const load = () => id && api.node(direction, id).then(setNode);
   useEffect(() => {
@@ -31,8 +31,16 @@ export function NodeDetailPage({ direction }: { direction: Direction }) {
   async function copyShare() {
     if (!id || direction !== "local") return;
     const data = await api.shareNode(id);
-    setShare(data.link);
-    await navigator.clipboard?.writeText(data.link);
+    setShare(data);
+    if (data.subscription) await navigator.clipboard?.writeText(data.subscription);
+  }
+
+  async function rotateShare() {
+    if (!id || direction !== "local") return;
+    const data = await api.rotateShareNode(id);
+    setShare(data);
+    if (data.subscription) await navigator.clipboard?.writeText(data.subscription);
+    await load();
   }
 
   if (!node) return <div className="panel">正在加载节点详情...</div>;
@@ -58,7 +66,13 @@ export function NodeDetailPage({ direction }: { direction: Direction }) {
           <p>外部地址：{String(node.config.server ?? node.config.share ?? "proxy.example.com")}</p>
           <p>内部地址：192.168.1.8:{String(node.config.listenPort ?? node.config.port ?? 443)}</p>
           <p>订阅链接：{direction === "local" ? "已生成" : "不适用"}</p>
-          {share && <p>分享链接：{share}</p>}
+          {share && (
+            <>
+              {share.subscription && <p>订阅链接：{share.subscription}</p>}
+              <p>单节点链接：{share.link}</p>
+              <p>{share.message}</p>
+            </>
+          )}
         </div>
 
         <div className="actions-bar">
@@ -73,7 +87,13 @@ export function NodeDetailPage({ direction }: { direction: Direction }) {
           {direction === "local" && (
             <button className="ghost" onClick={copyShare}>
               <QrCode size={18} />
-              分享二维码
+              复制分享
+            </button>
+          )}
+          {direction === "local" && (
+            <button className="ghost" onClick={rotateShare}>
+              <RotateCw size={18} />
+              轮换链接
             </button>
           )}
           <button className="danger">

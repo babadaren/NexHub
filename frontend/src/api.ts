@@ -1,4 +1,4 @@
-import type { AdminUser, DashboardSummary, Direction, NodeConfig, NodeTestResult, RealtimePoint } from "./types";
+import type { AdminUser, BackupSummary, DashboardSummary, Direction, ImportApplyResult, NodeConfig, NodeTestResult, RealtimePoint, RestoreResult, SharePayload, SubscriptionSource } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 const TOKEN_KEY = "proxy-control-center-token";
@@ -58,16 +58,31 @@ export const api = {
     request<void>(`${direction === "remote" ? "/api/remote-nodes" : "/api/local-nodes"}/${id}`, { method: "DELETE" }),
   testNode: (direction: Direction, id: string) =>
     request<NodeTestResult>(`${direction === "remote" ? "/api/remote-nodes" : "/api/local-nodes"}/${id}/test`, { method: "POST" }),
-  shareNode: (id: string) => request<{ link: string; subscription: string; clash: string; singBox: unknown }>(`/api/local-nodes/${id}/share`),
+  shareNode: (id: string) => request<SharePayload>(`/api/local-nodes/${id}/share`),
+  rotateShareNode: (id: string) => request<SharePayload>(`/api/local-nodes/${id}/share/rotate`, { method: "POST" }),
   parseImport: (input: string) =>
     request<{ nodes: Array<Record<string, unknown>> }>("/api/remote-nodes/import/parse", {
       method: "POST",
       body: JSON.stringify({ input })
     }),
+  applyImport: (nodes: Array<Record<string, unknown>>) =>
+    request<ImportApplyResult>("/api/remote-nodes/import/apply", {
+      method: "POST",
+      body: JSON.stringify({ nodes })
+    }),
+  subscriptions: () => request<SubscriptionSource[]>("/api/subscriptions"),
+  createSubscription: (payload: { name: string; url?: string; content?: string; autoRefresh?: boolean; refreshCron?: string }) =>
+    request<SubscriptionSource>("/api/subscriptions", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  refreshSubscription: (id: string) => request<ImportApplyResult>(`/api/subscriptions/${id}/refresh`, { method: "POST" }),
   protocols: (direction: Direction) => request<Array<{ protocol: string; label: string }>>(`/api/protocols?direction=${direction}`),
   realtime: () => request<{ now: Record<string, number>; points: RealtimePoint[]; events: Array<Record<string, unknown>> }>("/api/realtime/summary"),
-  systemStatus: () => request<{ version: string; deployment: Record<string, string>; ports: Record<string, string> }>("/api/system/status"),
-  backup: () => request<{ file: string; message: string }>("/api/system/backup", { method: "POST" }),
+  systemStatus: () => request<{ version: string; deployment: Record<string, string>; ports: Record<string, string>; engine?: { runtime?: Record<string, unknown> } }>("/api/system/status"),
+  backups: () => request<BackupSummary[]>("/api/system/backups"),
+  backup: () => request<BackupSummary & { message: string }>("/api/system/backup", { method: "POST" }),
+  restoreBackup: (file: string) => request<RestoreResult>(`/api/system/backups/${encodeURIComponent(file)}/restore`, { method: "POST" }),
   updateCheck: () => request<{ current: string; latest: string; upToDate: boolean }>("/api/system/update-check", { method: "POST" }),
   changePassword: (password: string) =>
     request<{ ok: boolean }>("/api/admin/password", {

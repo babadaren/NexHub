@@ -1,20 +1,33 @@
 import { useEffect, useState } from "react";
 import { Download, KeyRound, RotateCcw, ShieldCheck } from "lucide-react";
 import { api } from "../api";
-import type { AdminUser } from "../types";
+import type { AdminUser, BackupSummary } from "../types";
 
 export function SettingsPage({ user }: { user: AdminUser }) {
-  const [status, setStatus] = useState<{ version: string; deployment: Record<string, string>; ports: Record<string, string> }>();
+  const [status, setStatus] = useState<{ version: string; deployment: Record<string, string>; ports: Record<string, string>; engine?: { runtime?: Record<string, unknown> } }>();
+  const [backups, setBackups] = useState<BackupSummary[]>([]);
   const [message, setMessage] = useState("");
   const [password, setPassword] = useState("");
 
   useEffect(() => {
     api.systemStatus().then(setStatus);
+    api.backups().then(setBackups);
   }, []);
 
   async function backup() {
     const result = await api.backup();
-    setMessage(result.message);
+    setMessage(`${result.message}，大小 ${formatBytes(result.sizeBytes)}`);
+    setBackups(await api.backups());
+  }
+
+  async function restoreBackup(file: string) {
+    const confirmed = window.confirm("恢复会用该备份替换当前配置。系统会先自动创建一份恢复前备份。确认继续？");
+    if (!confirmed) return;
+    const result = await api.restoreBackup(file);
+    setMessage(`${result.message}，恢复前备份：${result.preRestoreFile}`);
+    const [nextStatus, nextBackups] = await Promise.all([api.systemStatus(), api.backups()]);
+    setStatus(nextStatus);
+    setBackups(nextBackups);
   }
 
   async function updateCheck() {
@@ -68,6 +81,10 @@ export function SettingsPage({ user }: { user: AdminUser }) {
             <dd>{status?.deployment.redis ?? "加载中"}</dd>
             <dt>代理核心</dt>
             <dd>{status?.deployment.engine ?? "加载中"}</dd>
+            <dt>核心模式</dt>
+            <dd>{String(status?.engine?.runtime?.mode ?? "加载中")}</dd>
+            <dt>核心进程</dt>
+            <dd>{status?.engine?.runtime?.running ? `运行中 #${String(status.engine.runtime.pid ?? "")}` : "未运行"}</dd>
             <dt>版本</dt>
             <dd>{status?.version ?? "0.1.0"}</dd>
           </dl>
@@ -85,6 +102,47 @@ export function SettingsPage({ user }: { user: AdminUser }) {
       </section>
 
       {message && <div className="notice">{message}</div>}
+
+      <section className="panel table-panel">
+        <h2>
+          <Download size={22} />
+          最近备份
+        </h2>
+        {backups.length === 0 ? (
+          <p>暂无备份。点击“备份数据”后会在数据目录生成备份文件。</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>文件</th>
+                <th>创建时间</th>
+                <th>大小</th>
+                <th>节点/订阅</th>
+                <th>说明</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {backups.map((backup) => (
+                <tr key={backup.file}>
+                  <td>{backup.file}</td>
+                  <td>{new Date(backup.createdAt).toLocaleString()}</td>
+                  <td>{formatBytes(backup.sizeBytes)}</td>
+                  <td>
+                    {backup.manifest.state.nodes} / {backup.manifest.state.subscriptions}
+                  </td>
+                  <td>{backup.containsSecrets ? "包含密钥和节点凭据，请妥善保管" : "不含敏感信息"}</td>
+                  <td>
+                    <button className="ghost small" onClick={() => restoreBackup(backup.file)}>
+                      恢复
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
 
       <section className="panel table-panel">
         <h2>
@@ -142,4 +200,10 @@ export function SettingsPage({ user }: { user: AdminUser }) {
       </section>
     </div>
   );
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }

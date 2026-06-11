@@ -10,10 +10,14 @@ services:
       SERVER_HOST: "0.0.0.0"
       SERVER_PORT: "${SERVER_PORT:-8080}"
       DATA_DIR: "/app/data"
+      STORAGE_DRIVER: "json"
       JWT_SECRET: "${JWT_SECRET}"
       CONFIG_ENCRYPTION_KEY: "${CONFIG_ENCRYPTION_KEY}"
       ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
       ENGINE_PROVIDER: "${ENGINE_PROVIDER:-sing-box}"
+      ENGINE_MODE: "${ENGINE_MODE:-render-only}"
+      ENGINE_BINARY: "${ENGINE_BINARY:-sing-box}"
+      ENGINE_CONFIG_DIR: "${ENGINE_CONFIG_DIR:-/app/data/engine}"
     volumes:
       - ./data:/app/data

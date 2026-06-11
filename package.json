@@ -7,6 +7,10 @@
     "dev": "concurrently \"pnpm --filter @proxy-control-center/backend dev\" \"pnpm --filter @proxy-control-center/frontend dev\"",
     "build": "pnpm --filter @proxy-control-center/backend build && pnpm --filter @proxy-control-center/frontend build",
     "start": "pnpm --filter @proxy-control-center/backend start",
+    "smoke": "node scripts/smoke.mjs",
+    "smoke:engine": "node scripts/engine-smoke.mjs",
+    "smoke:postgres": "node scripts/postgres-smoke.mjs",
+    "test:adapters": "node scripts/adapter-golden.mjs",
     "lint": "pnpm --filter @proxy-control-center/frontend lint",
     "typecheck": "pnpm --filter @proxy-control-center/backend typecheck && pnpm --filter @proxy-control-center/frontend typecheck"
   },

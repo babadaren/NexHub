@@ -1,17 +1,36 @@
 import { Link } from "react-router-dom";
-import { Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Plus, RefreshCw, Rss, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { Direction, NodeConfig } from "../types";
+import type { Direction, NodeConfig, SubscriptionSource } from "../types";
 import { StatusBadge } from "../components/Status";
+
+function subscriptionSourceLabel(subscription: SubscriptionSource) {
+  if (!subscription.url) return "粘贴内容";
+  try {
+    return new URL(subscription.url).host;
+  } catch {
+    return "订阅 URL";
+  }
+}
 
 export function NodesPage({ direction }: { direction: Direction }) {
   const [nodes, setNodes] = useState<NodeConfig[]>([]);
+  const [subscriptions, setSubscriptions] = useState<SubscriptionSource[]>([]);
   const [testing, setTesting] = useState<string | undefined>();
+  const [refreshingSubscription, setRefreshingSubscription] = useState<string | undefined>();
+  const [subscriptionForm, setSubscriptionForm] = useState({ name: "", url: "", content: "" });
+  const [subscriptionError, setSubscriptionError] = useState<string | undefined>();
 
   const load = () => api.nodes(direction).then(setNodes);
+  const loadSubscriptions = () => {
+    if (direction !== "remote") return Promise.resolve();
+    return api.subscriptions().then(setSubscriptions);
+  };
+
   useEffect(() => {
     load();
+    loadSubscriptions();
   }, [direction]);
 
   async function test(id: string) {
@@ -29,6 +48,38 @@ export function NodesPage({ direction }: { direction: Direction }) {
     await load();
   }
 
+  async function createSubscription(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubscriptionError(undefined);
+    try {
+      const name = subscriptionForm.name.trim();
+      const url = subscriptionForm.url.trim();
+      const content = subscriptionForm.content.trim();
+      if (!name || (!url && !content)) {
+        setSubscriptionError("请填写名称，并至少提供订阅 URL 或粘贴内容。");
+        return;
+      }
+      await api.createSubscription({ name, url: url || undefined, content: content || undefined });
+      setSubscriptionForm({ name: "", url: "", content: "" });
+      await loadSubscriptions();
+    } catch (error) {
+      setSubscriptionError(error instanceof Error ? error.message : "订阅源创建失败");
+    }
+  }
+
+  async function refreshSubscription(id: string) {
+    setRefreshingSubscription(id);
+    setSubscriptionError(undefined);
+    try {
+      await api.refreshSubscription(id);
+      await Promise.all([loadSubscriptions(), load()]);
+    } catch (error) {
+      setSubscriptionError(error instanceof Error ? error.message : "订阅刷新失败");
+    } finally {
+      setRefreshingSubscription(undefined);
+    }
+  }
+
   const title = direction === "remote" ? "远端节点" : "本地节点";
 
   return (
@@ -43,6 +94,75 @@ export function NodesPage({ direction }: { direction: Direction }) {
           {direction === "remote" ? "添加远端节点" : "创建本地节点"}
         </Link>
       </section>
+
+      {direction === "remote" && (
+        <section className="panel subscription-panel">
+          <div className="list-header compact">
+            <div>
+              <h2>
+                <Rss size={18} />
+                订阅源
+              </h2>
+              <p>保存常用订阅，手动刷新后新增节点会先进入草稿。</p>
+            </div>
+          </div>
+          <form className="subscription-form" onSubmit={createSubscription}>
+            <label>
+              名称
+              <input value={subscriptionForm.name} onChange={(event) => setSubscriptionForm((form) => ({ ...form, name: event.target.value }))} placeholder="机场 A / 自用配置" />
+            </label>
+            <label>
+              订阅 URL
+              <input value={subscriptionForm.url} onChange={(event) => setSubscriptionForm((form) => ({ ...form, url: event.target.value }))} placeholder="https://example.com/sub" />
+            </label>
+            <label className="wide">
+              粘贴内容
+              <textarea
+                value={subscriptionForm.content}
+                onChange={(event) => setSubscriptionForm((form) => ({ ...form, content: event.target.value }))}
+                placeholder="支持 vmess/vless/trojan/ss 链接、base64 订阅、Clash YAML、Sing-box JSON"
+              />
+            </label>
+            <button className="primary small" type="submit">
+              <Plus size={16} />
+              保存订阅源
+            </button>
+          </form>
+          {subscriptionError && <div className="error-box">{subscriptionError}</div>}
+          {subscriptions.length > 0 && (
+            <table className="subscription-table">
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>来源</th>
+                  <th>最近刷新</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {subscriptions.map((subscription) => (
+                  <tr key={subscription.id}>
+                    <td>{subscription.name}</td>
+                    <td>{subscriptionSourceLabel(subscription)}</td>
+                    <td>{subscription.lastRefreshAt ? new Date(subscription.lastRefreshAt).toLocaleString() : "未刷新"}</td>
+                    <td>
+                      <StatusBadge status={subscription.lastRefreshStatus ?? "never"} />
+                      {subscription.lastRefreshMessage && <span className="muted inline-message">{subscription.lastRefreshMessage}</span>}
+                    </td>
+                    <td>
+                      <button className="ghost small" onClick={() => refreshSubscription(subscription.id)} disabled={refreshingSubscription === subscription.id}>
+                        <RefreshCw size={16} />
+                        刷新
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
 
       {nodes.length === 0 ? (
         <section className="empty panel">

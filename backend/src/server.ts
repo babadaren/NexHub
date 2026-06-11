@@ -6,6 +6,7 @@ import jwt from "@fastify/jwt";
 import sensible from "@fastify/sensible";
 import fastifyStatic from "@fastify/static";
 import { config } from "./config.js";
+import { redisRuntime } from "./redis.js";
 import { registerRoutes } from "./routes.js";
 import { store } from "./storage.js";
 
@@ -25,6 +26,7 @@ await app.register(jwt, {
 });
 
 await store.load();
+await redisRuntime.connect();
 if (store.generatedAdminPassword) {
   app.log.warn("[setup] admin account created");
   app.log.warn(`[setup] username: ${config.adminUsername}`);
@@ -61,3 +63,9 @@ try {
   app.log.error(error);
   process.exit(1);
 }
+
+process.on("SIGTERM", async () => {
+  await redisRuntime.close();
+  await store.close();
+  process.exit(0);
+});

@@ -1,4 +1,5 @@
 import { store } from "./storage.js";
+import { redisRuntime } from "./redis.js";
 
 export function dashboardSummary() {
   const nodes = store.listNodes();
@@ -18,8 +19,8 @@ export function dashboardSummary() {
     ],
     health: [
       { name: "Docker", status: "normal", message: "运行中" },
-      { name: "PostgreSQL", status: "normal", message: "已配置" },
-      { name: "Redis", status: "normal", message: "已配置" },
+      { name: "PostgreSQL", status: "normal", message: store.driver === "postgres" ? "已连接" : "开发存储" },
+      { name: "Redis", status: redisRuntime.status === "error" ? "warning" : "normal", message: redisRuntime.status === "connected" ? "已连接" : "可选" },
       { name: "代理核心", status: "normal", message: "sing-box 模式" },
       { name: "默认端口", status: "normal", message: "可用" }
     ],
@@ -55,8 +56,15 @@ export function realtimeSummary() {
   };
 }
 
-export function nodeRealtime(nodeId: string) {
+export async function realtimeEvents() {
+  const redisEvents = await redisRuntime.readEvents(20);
+  if (redisEvents.length > 0) return redisEvents;
+  return store.auditLogs().slice(0, 12);
+}
+
+export async function nodeRealtime(nodeId: string) {
   const node = store.getNode(nodeId);
+  const redisNow = await redisRuntime.readNodeNow(nodeId);
   const points = Array.from({ length: 15 }, (_, index) => ({
     time: `${index + 1}m`,
     inbound: Math.round(40 + Math.sin(index) * 16 + index * 3),
@@ -65,9 +73,10 @@ export function nodeRealtime(nodeId: string) {
   }));
   return {
     nodeId,
-    status: node?.status ?? "draft",
-    latencyMs: node?.safeSummary.latencyMs ?? 58,
-    activeConnections: node?.safeSummary.clients ?? 3,
+    status: redisNow?.status ?? node?.status ?? "draft",
+    latencyMs: redisNow?.latency_ms ? Number(redisNow.latency_ms) : node?.safeSummary.latencyMs ?? 58,
+    activeConnections: redisNow?.active_connections ? Number(redisNow.active_connections) : node?.safeSummary.clients ?? 3,
+    updatedAt: redisNow?.updated_at,
     points
   };
 }
