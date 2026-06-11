@@ -211,6 +211,7 @@ export async function registerRoutes(app: FastifyInstance) {
       redis: "configured",
       engine: config.engineProvider
     },
+    engine: store.snapshot().settings.engine ?? null,
     ports: {
       localTcpPortRange: config.localTcpPortRange,
       localUdpPortRange: config.localUdpPortRange

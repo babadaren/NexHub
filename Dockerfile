@@ -17,6 +17,7 @@ COPY package.json pnpm-workspace.yaml ./
 COPY backend/package.json backend/package.json
 RUN pnpm install --prod --filter @proxy-control-center/backend --frozen-lockfile=false
 COPY --from=build /app/backend/dist backend/dist
+COPY --from=build /app/backend/migrations backend/migrations
 COPY --from=build /app/frontend/dist backend/public
 EXPOSE 8080
 CMD ["node", "backend/dist/server.js"]

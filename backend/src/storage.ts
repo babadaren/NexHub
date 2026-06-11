@@ -3,6 +3,7 @@ import path from "node:path";
 import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
 import { config } from "./config.js";
+import { renderEngineConfig } from "./engine.js";
 import type { AppState, AuditLog, Direction, NodeConfig, NodeTestResult, TestStatus } from "./types.js";
 
 const stateFile = path.join(config.dataDir, "state.json");
@@ -171,6 +172,7 @@ export class JsonStore {
     this.snapshot().nodes.unshift(node);
     this.addAudit("node.created", "node", node.id, `创建${direction === "remote" ? "远端" : "本地"}节点 ${node.name}`);
     await this.save();
+    await this.refreshEngineConfig();
     return node;
   }
 
@@ -181,6 +183,7 @@ export class JsonStore {
     node.safeSummary = this.safeSummary(node.direction, node.protocol, node.config);
     this.addAudit("node.updated", "node", node.id, `更新节点 ${node.name}`);
     await this.save();
+    await this.refreshEngineConfig();
     return node;
   }
 
@@ -190,6 +193,7 @@ export class JsonStore {
     state.nodes = state.nodes.filter((item) => item.id !== id);
     this.addAudit("node.deleted", "node", id, node ? `删除节点 ${node.name}` : "删除节点");
     await this.save();
+    await this.refreshEngineConfig();
   }
 
   async runTest(node: NodeConfig) {
@@ -219,6 +223,7 @@ export class JsonStore {
     this.snapshot().tests = this.snapshot().tests.slice(0, 100);
     this.addAudit("node.tested", "node", node.id, `一键测试 ${node.name}: ${status}`);
     await this.save();
+    await this.refreshEngineConfig();
     return result;
   }
 
@@ -243,6 +248,27 @@ export class JsonStore {
     };
     state.auditLogs.unshift(log);
     state.auditLogs = state.auditLogs.slice(0, 200);
+  }
+
+  private async refreshEngineConfig() {
+    try {
+      const result = await renderEngineConfig(this.snapshot().nodes);
+      this.snapshot().settings.engine = {
+        provider: config.engineProvider,
+        currentPath: result.currentPath,
+        previousPath: result.previousPath,
+        lastRenderAt: now(),
+        lastRenderMessage: result.message
+      };
+      await this.save();
+    } catch (error) {
+      this.snapshot().settings.engine = {
+        provider: config.engineProvider,
+        lastRenderAt: now(),
+        lastRenderError: error instanceof Error ? error.message : "代理核心配置生成失败"
+      };
+      await this.save();
+    }
   }
 
   private safeSummary(direction: Direction, protocol: string, data: Record<string, unknown>) {
