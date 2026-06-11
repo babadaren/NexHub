@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+.env.local
+data/
+postgres_data/
+redis_data/
+*.log

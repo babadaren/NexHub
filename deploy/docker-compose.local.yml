@@ -1,0 +1,90 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: proxy-control-center:${IMAGE_TAG:-latest}
+    container_name: proxy-control-center
+    restart: unless-stopped
+    ports:
+      - "${BIND_HOST:-127.0.0.1}:${SERVER_PORT:-8080}:8080"
+      - "${LOCAL_TCP_PORT_RANGE:-20000-20100}:${LOCAL_TCP_PORT_RANGE:-20000-20100}/tcp"
+      - "${LOCAL_UDP_PORT_RANGE:-20000-20100}:${LOCAL_UDP_PORT_RANGE:-20000-20100}/udp"
+    environment:
+      AUTO_SETUP: "true"
+      SERVER_HOST: "0.0.0.0"
+      SERVER_PORT: "8080"
+      DATA_DIR: "/app/data"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-proxy_panel}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-proxy_panel}?sslmode=disable"
+      REDIS_URL: "redis://:${REDIS_PASSWORD:-}@redis:6379/${REDIS_DB:-0}"
+      JWT_SECRET: "${JWT_SECRET}"
+      JWT_EXPIRE_HOURS: "${JWT_EXPIRE_HOURS:-24}"
+      CONFIG_ENCRYPTION_KEY: "${CONFIG_ENCRYPTION_KEY}"
+      ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
+      ENGINE_PROVIDER: "${ENGINE_PROVIDER:-sing-box}"
+      LOCAL_TCP_PORT_RANGE: "${LOCAL_TCP_PORT_RANGE:-20000-20100}"
+      LOCAL_UDP_PORT_RANGE: "${LOCAL_UDP_PORT_RANGE:-20000-20100}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      TZ: "${TZ:-Asia/Shanghai}"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - proxy-control-center
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: proxy-control-center-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-proxy_panel}"
+      POSTGRES_USER: "${POSTGRES_USER:-proxy_panel}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      TZ: "${TZ:-Asia/Shanghai}"
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+    networks:
+      - proxy-control-center
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-proxy_panel} -d ${POSTGRES_DB:-proxy_panel}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: proxy-control-center-redis
+    restart: unless-stopped
+    command: >
+      sh -c 'redis-server
+      --save 60 1
+      --appendonly yes
+      --appendfsync everysec
+      ${REDIS_PASSWORD:+--requirepass "$REDIS_PASSWORD"}'
+    environment:
+      REDISCLI_AUTH: "${REDIS_PASSWORD:-}"
+      TZ: "${TZ:-Asia/Shanghai}"
+    volumes:
+      - ./redis_data:/data
+    networks:
+      - proxy-control-center
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  proxy-control-center:
+    driver: bridge
