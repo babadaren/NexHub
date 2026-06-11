@@ -3,6 +3,7 @@ dist/
 .env
 .env.local
 data/
+data-smoke/
 postgres_data/
 redis_data/
 *.log
