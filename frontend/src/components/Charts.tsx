@@ -2,6 +2,7 @@ import { Area, AreaChart, CartesianGrid, Line, LineChart, ResponsiveContainer, T
 import type { RealtimePoint } from "../types";
 
 export function Sparkline({ data, color = "#2f83ff" }: { data: RealtimePoint[]; color?: string }) {
+  if (data.length === 0) return <div className="chart-empty compact">暂无实时数据</div>;
   return (
     <ResponsiveContainer width="100%" height={42}>
       <AreaChart data={data}>
@@ -18,6 +19,7 @@ export function Sparkline({ data, color = "#2f83ff" }: { data: RealtimePoint[]; 
 }
 
 export function TrafficChart({ data, compact = false }: { data: RealtimePoint[]; compact?: boolean }) {
+  if (data.length === 0) return <div className={compact ? "chart-empty compact" : "chart-empty"}>暂无实时数据</div>;
   return (
     <ResponsiveContainer width="100%" height={compact ? 220 : 310}>
       <LineChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>

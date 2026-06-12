@@ -8,6 +8,8 @@ export interface AdminAccount {
   email?: string;
   passwordHash: string;
   mustChangePassword: boolean;
+  failedLoginCount?: number;
+  lockedUntil?: string;
   createdAt: string;
   updatedAt: string;
   lastLoginAt?: string;
@@ -24,6 +26,7 @@ export interface NodeConfig {
   safeSummary: Record<string, unknown>;
   lastTestStatus?: TestStatus;
   lastTestAt?: string;
+  sourceMissing?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -47,6 +50,20 @@ export interface NodeTestResult {
   createdAt: string;
 }
 
+export interface CreateNodeResult {
+  node: NodeConfig;
+  test?: NodeTestResult;
+}
+
+export interface NodeConfigVersion {
+  id: string;
+  nodeId: string;
+  version: number;
+  config: Record<string, unknown>;
+  summary: Record<string, unknown>;
+  createdAt: string;
+}
+
 export interface AuditLog {
   id: string;
   action: string;
@@ -62,8 +79,11 @@ export interface SubscriptionSource {
   name: string;
   url?: string;
   content?: string;
+  sourceType: "url" | "content";
   autoRefresh: boolean;
   refreshCron?: string;
+  autoEnableNewNodes: boolean;
+  allowPrivateNetwork: boolean;
   lastRefreshStatus?: "never" | "passed" | "warning" | "failed";
   lastRefreshMessage?: string;
   lastRefreshAt?: string;
@@ -71,11 +91,53 @@ export interface SubscriptionSource {
   updatedAt: string;
 }
 
+export interface TrafficSummary {
+  id: string;
+  day: string;
+  nodeId?: string;
+  direction: Direction;
+  uploadBytes: number;
+  downloadBytes: number;
+  maxLatencyMs?: number;
+  avgLatencyMs?: number;
+  errorCount: number;
+  source: "redis" | "estimated";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LocalShareToken {
+  id: string;
+  nodeId: string;
+  tokenHash: string;
+  status: "active" | "revoked";
+  lastUsedAt?: string;
+  expiresAt?: string;
+  createdAt: string;
+  revokedAt?: string;
+}
+
+export interface BackupJob {
+  id: string;
+  jobType: "backup" | "restore";
+  status: "passed" | "warning" | "failed";
+  filePath?: string;
+  containsSecrets: boolean;
+  message?: string;
+  manifest: Record<string, unknown>;
+  createdAt: string;
+  finishedAt?: string;
+}
+
 export interface AppState {
   admins: AdminAccount[];
   nodes: NodeConfig[];
+  nodeConfigVersions: NodeConfigVersion[];
   tests: NodeTestResult[];
   auditLogs: AuditLog[];
   subscriptions: SubscriptionSource[];
+  trafficSummaries: TrafficSummary[];
+  shareTokens: LocalShareToken[];
+  backupJobs: BackupJob[];
   settings: Record<string, unknown>;
 }

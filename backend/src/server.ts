@@ -5,9 +5,10 @@ import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import sensible from "@fastify/sensible";
 import fastifyStatic from "@fastify/static";
-import { config } from "./config.js";
+import { config, validateStartupConfig } from "./config.js";
 import { redisRuntime } from "./redis.js";
 import { registerRoutes } from "./routes.js";
+import { SubscriptionScheduler } from "./scheduler.js";
 import { store } from "./storage.js";
 
 const app = Fastify({
@@ -25,8 +26,14 @@ await app.register(jwt, {
   secret: config.jwtSecret
 });
 
-await store.load();
-await redisRuntime.connect();
+try {
+  validateStartupConfig();
+  await store.load();
+  await redisRuntime.connect();
+} catch (error) {
+  app.log.error({ error, message: error instanceof Error ? error.message : String(error) }, "startup dependency check failed");
+  process.exit(1);
+}
 if (store.generatedAdminPassword) {
   app.log.warn("[setup] admin account created");
   app.log.warn(`[setup] username: ${config.adminUsername}`);
@@ -35,6 +42,8 @@ if (store.generatedAdminPassword) {
 }
 
 await registerRoutes(app);
+const subscriptionScheduler = new SubscriptionScheduler(app.log);
+subscriptionScheduler.start();
 
 const publicDirCandidates = [
   process.env.PUBLIC_DIR,
@@ -65,6 +74,7 @@ try {
 }
 
 process.on("SIGTERM", async () => {
+  subscriptionScheduler.stop();
   await redisRuntime.close();
   await store.close();
   process.exit(0);

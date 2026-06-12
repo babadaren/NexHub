@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { renderNodeEngineConfig } from "./adapters.js";
 import { config } from "./config.js";
@@ -15,6 +15,8 @@ export interface EngineStatus {
   previousPath: string;
   lastAction?: string;
   lastError?: string;
+  lastLogError?: string;
+  lastLogErrorAt?: string;
   lastCheckedAt?: string;
   lastStartedAt?: string;
 }
@@ -31,6 +33,7 @@ const engineDir = config.engineConfigDir ?? path.join(config.dataDir, "engine");
 const currentPath = path.join(engineDir, "current.json");
 const previousPath = path.join(engineDir, "previous.json");
 const nextPath = path.join(engineDir, "next.json");
+const engineLogPath = path.join(config.dataDir, "logs", "engine.log");
 const defaultConfig = { inbounds: [], outbounds: [{ type: "direct", tag: "direct" }], route: { final: "direct" } };
 
 class EngineRuntime {
@@ -85,6 +88,15 @@ class EngineRuntime {
       stdio: "pipe",
       windowsHide: true
     });
+    const startup = await waitForStartup(this.process, config.engineHealthcheckTimeoutSeconds * 1000);
+    if (!startup.ok) {
+      this.process = undefined;
+      this.status.running = false;
+      this.status.pid = undefined;
+      this.status.lastAction = "start-failed";
+      this.status.lastError = startup.message;
+      throw new Error(startup.message);
+    }
     this.status.running = true;
     this.status.pid = this.process.pid;
     this.status.lastStartedAt = new Date().toISOString();
@@ -100,6 +112,11 @@ class EngineRuntime {
     this.process.stderr.on("data", (chunk) => {
       const text = chunk.toString().trim();
       if (text) this.status.lastError = text.slice(-1000);
+      void this.safeWriteEngineLog("runtime", "stderr", text);
+    });
+    this.process.stdout.on("data", (chunk) => {
+      const text = chunk.toString().trim();
+      void this.safeWriteEngineLog("runtime", "stdout", text);
     });
     return { ok: true, message: "engine started", pid: this.process.pid };
   }
@@ -127,7 +144,10 @@ class EngineRuntime {
   }
 
   private async runCommand(args: string[], action: string) {
+    await this.safeWriteEngineLog(action, "command", `${config.engineBinary} ${args.join(" ")}`);
     const result = await runProcess(config.engineBinary, args, config.engineReloadTimeoutSeconds * 1000);
+    await this.safeWriteEngineLog(action, "stdout", result.stdout);
+    await this.safeWriteEngineLog(action, "stderr", result.stderr);
     this.status.lastAction = action;
     if (!result.ok) {
       this.status.lastError = result.stderr || result.stdout || `${action} failed`;
@@ -135,6 +155,15 @@ class EngineRuntime {
     }
     this.status.lastError = undefined;
     return { ok: true, message: result.stdout || `${action} ok` };
+  }
+
+  private async safeWriteEngineLog(action: string, stream: string, message: string) {
+    try {
+      await writeEngineLog(action, stream, message);
+    } catch (error) {
+      this.status.lastLogError = error instanceof Error ? error.message : "engine log write failed";
+      this.status.lastLogErrorAt = new Date().toISOString();
+    }
   }
 }
 
@@ -168,6 +197,91 @@ function waitForExit(proc: ChildProcessWithoutNullStreams, timeoutMs: number) {
       resolve();
     });
   });
+}
+
+function waitForStartup(proc: ChildProcessWithoutNullStreams, timeoutMs: number) {
+  return new Promise<{ ok: boolean; message: string }>((resolve) => {
+    let settled = false;
+    let stderr = "";
+    const settle = (result: { ok: boolean; message: string }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      proc.off("error", onError);
+      proc.off("exit", onExit);
+      proc.stderr.off("data", onStderr);
+      resolve(result);
+    };
+    const onError = (error: Error) => settle({ ok: false, message: error.message });
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) =>
+      settle({ ok: false, message: stderr || `engine exited during startup with ${code === null ? signal : `code ${code}`}` });
+    const onStderr = (chunk: Buffer) => {
+      stderr = (stderr + chunk.toString()).trim().slice(-1000);
+    };
+    const timer = setTimeout(() => settle({ ok: true, message: "engine startup confirmed" }), Math.max(timeoutMs, 1));
+    proc.once("error", onError);
+    proc.once("exit", onExit);
+    proc.stderr.on("data", onStderr);
+  });
+}
+
+async function writeEngineLog(action: string, stream: string, message: string) {
+  if (!config.logOutputToFile || !message.trim()) return;
+  await rotateEngineLogIfNeeded().catch(() => undefined);
+  await mkdir(path.dirname(engineLogPath), { recursive: true });
+  const line = JSON.stringify({
+    ts: new Date().toISOString(),
+    provider: config.engineProvider,
+    mode: config.engineMode,
+    action,
+    stream,
+    message: message.trim().slice(-4000)
+  });
+  await writeFile(engineLogPath, `${line}\n`, { encoding: "utf8", flag: "a" });
+}
+
+async function rotateEngineLogIfNeeded() {
+  await cleanupOldEngineLogBackups();
+  const maxBytes = Math.max(config.logRotationMaxSizeMb, 1) * 1024 * 1024;
+  let stats;
+  try {
+    stats = await stat(engineLogPath);
+  } catch {
+    return;
+  }
+  if (stats.size < maxBytes) return;
+  const backups = Math.max(config.logRotationMaxBackups, 1);
+  for (let index = backups - 1; index >= 1; index -= 1) {
+    const source = `${engineLogPath}.${index}`;
+    const target = `${engineLogPath}.${index + 1}`;
+    try {
+      await rename(source, target);
+    } catch {
+      // Missing older rotation files are expected.
+    }
+  }
+  await rename(engineLogPath, `${engineLogPath}.1`).catch(() => undefined);
+}
+
+async function cleanupOldEngineLogBackups() {
+  if (config.logRotationMaxAgeDays <= 0) return;
+  const cutoff = Date.now() - config.logRotationMaxAgeDays * 24 * 60 * 60 * 1000;
+  const dir = path.dirname(engineLogPath);
+  let files: string[];
+  try {
+    files = await readdir(dir);
+  } catch {
+    return;
+  }
+  await Promise.all(
+    files
+      .filter((file) => file.startsWith(`${path.basename(engineLogPath)}.`))
+      .map(async (file) => {
+        const fullPath = path.join(dir, file);
+        const stats = await stat(fullPath).catch(() => undefined);
+        if (stats && stats.mtimeMs < cutoff) await unlink(fullPath).catch(() => undefined);
+      })
+  );
 }
 
 export const engineRuntime = new EngineRuntime();
@@ -218,7 +332,7 @@ export async function renderEngineConfig(nodes: NodeConfig[]): Promise<EngineRen
 
   try {
     await readFile(currentPath, "utf8");
-    await rename(currentPath, previousPath);
+    await copyFile(currentPath, previousPath);
   } catch {
     await writeFile(previousPath, JSON.stringify(defaultConfig, null, 2), "utf8");
   }
@@ -227,7 +341,7 @@ export async function renderEngineConfig(nodes: NodeConfig[]): Promise<EngineRen
   try {
     await engineRuntime.reload();
   } catch (error) {
-    await rename(previousPath, currentPath);
+    await copyFile(previousPath, currentPath);
     await engineRuntime.reload().catch(() => undefined);
     throw error;
   }

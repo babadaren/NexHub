@@ -6,13 +6,6 @@ import type { DashboardSummary, RealtimePoint } from "../types";
 import { Sparkline, TrafficChart } from "../components/Charts";
 import { StatusBadge } from "../components/Status";
 
-const demoPoints: RealtimePoint[] = Array.from({ length: 12 }, (_, index) => ({
-  time: String(index),
-  inbound: 20 + Math.sin(index) * 8 + index * 2,
-  outbound: 16 + Math.cos(index) * 5 + index,
-  connections: 10 + index
-}));
-
 export function DashboardPage() {
   const [summary, setSummary] = useState<DashboardSummary>();
   const [traffic, setTraffic] = useState<RealtimePoint[]>([]);
@@ -32,7 +25,7 @@ export function DashboardPage() {
             <Globe2 size={26} />
             <span>{metric.label}</span>
             <strong>{metric.value}</strong>
-            <Sparkline data={demoPoints} />
+            <Sparkline data={traffic} />
           </div>
         ))}
       </section>

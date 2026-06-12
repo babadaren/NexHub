@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { Activity, Clock, Gauge, Home, Monitor, Search, Server, Settings, Shield, User, Zap } from "lucide-react";
+import { Activity, Clock, Home, LogOut, Monitor, Search, Server, Settings, Shield, User, Zap } from "lucide-react";
+import { api } from "../api";
 import type { AdminUser } from "../types";
 
 const nav = [
@@ -7,7 +8,7 @@ const nav = [
   { to: "/remote-nodes", label: "远端节点", icon: Server },
   { to: "/local-nodes", label: "本地节点", icon: Monitor },
   { to: "/realtime", label: "实时监控", icon: Activity },
-  { to: "/dashboard?history=1", label: "历史摘要", icon: Clock },
+  { to: "/history", label: "历史摘要", icon: Clock },
   { to: "/settings", label: "系统设置", icon: Settings }
 ];
 
@@ -16,10 +17,11 @@ const titleMap: Record<string, { title: string; subtitle: string }> = {
   "/remote-nodes": { title: "远端节点", subtitle: "管理本机要连接出去的节点" },
   "/local-nodes": { title: "本地节点", subtitle: "管理别人连接本机的入口" },
   "/realtime": { title: "实时监控", subtitle: "查看速率、延迟、连接数和短期事件" },
+  "/history": { title: "历史摘要", subtitle: "查看每日聚合、测试趋势和流量摘要" },
   "/settings": { title: "系统设置", subtitle: "只有管理员和部署维护，不做用户/权限管理" }
 };
 
-export function AppShell({ user }: { user: AdminUser }) {
+export function AppShell({ user, onLogout }: { user: AdminUser; onLogout: () => void }) {
   const location = useLocation();
   const navigate = useNavigate();
   const basePath = `/${location.pathname.split("/")[1] || "dashboard"}`;
@@ -27,6 +29,12 @@ export function AppShell({ user }: { user: AdminUser }) {
     title: location.pathname.includes("new") ? "节点向导" : "节点详情",
     subtitle: "所有状态和操作集中在一个页面"
   };
+
+  async function logout() {
+    await api.logout();
+    onLogout();
+    navigate("/login", { replace: true });
+  }
 
   return (
     <div className="app">
@@ -69,9 +77,18 @@ export function AppShell({ user }: { user: AdminUser }) {
             <kbd>⌘K</kbd>
           </label>
           <span className="pill success">Production</span>
+          {user.mustChangePassword && (
+            <button className="warning-action" onClick={() => navigate("/settings")}>
+              <Shield size={17} />
+              修改初始密码
+            </button>
+          )}
           <button className="ghost" onClick={() => navigate("/settings")}>
             <User size={17} />
             {user.username}
+          </button>
+          <button className="ghost icon" onClick={logout} title="退出登录">
+            <LogOut size={17} />
           </button>
           <button className="primary small" onClick={() => navigate(basePath === "/local-nodes" ? "/local-nodes/new" : "/remote-nodes/new")}>
             <Zap size={16} />

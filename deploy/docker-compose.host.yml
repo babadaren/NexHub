@@ -1,23 +1,115 @@
+# Linux-only advanced deployment. Host network lets local nodes listen on
+# arbitrary host ports, but it removes Docker bridge isolation for the app.
+x-app-environment: &app-environment
+  AUTO_SETUP: "true"
+  SERVER_HOST: "${BIND_HOST:-127.0.0.1}"
+  SERVER_PORT: "${SERVER_PORT:-8080}"
+  SERVER_MODE: "${SERVER_MODE:-release}"
+  PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
+  DATA_DIR: "/app/data"
+  STORAGE_DRIVER: "${STORAGE_DRIVER:-postgres}"
+  DATABASE_URL: "postgres://${POSTGRES_USER:-proxy_panel}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB:-proxy_panel}?sslmode=disable"
+  DATABASE_MAX_OPEN_CONNS: "${DATABASE_MAX_OPEN_CONNS:-50}"
+  DATABASE_CONN_MAX_LIFETIME_MINUTES: "${DATABASE_CONN_MAX_LIFETIME_MINUTES:-30}"
+  REDIS_URL: "redis://:${REDIS_PASSWORD:-}@127.0.0.1:6379/${REDIS_DB:-0}"
+  REDIS_REQUIRED: "${REDIS_REQUIRED:-false}"
+  JWT_SECRET: "${JWT_SECRET}"
+  JWT_EXPIRE_HOURS: "${JWT_EXPIRE_HOURS:-24}"
+  CONFIG_ENCRYPTION_KEY: "${CONFIG_ENCRYPTION_KEY}"
+  LOGIN_MAX_FAILURES: "${LOGIN_MAX_FAILURES:-5}"
+  LOGIN_LOCK_MINUTES: "${LOGIN_LOCK_MINUTES:-15}"
+  ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
+  ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
+  REALTIME_TTL_HOURS: "${REALTIME_TTL_HOURS:-6}"
+  REALTIME_MAX_TTL_HOURS: "${REALTIME_MAX_TTL_HOURS:-24}"
+  ENGINE_PROVIDER: "${ENGINE_PROVIDER:-sing-box}"
+  ENGINE_MODE: "${ENGINE_MODE:-render-only}"
+  ENGINE_BINARY: "${ENGINE_BINARY:-sing-box}"
+  ENGINE_CONFIG_DIR: "${ENGINE_CONFIG_DIR:-/app/data/engine}"
+  ENGINE_RELOAD_TIMEOUT_SECONDS: "${ENGINE_RELOAD_TIMEOUT_SECONDS:-10}"
+  ENGINE_HEALTHCHECK_TIMEOUT_SECONDS: "${ENGINE_HEALTHCHECK_TIMEOUT_SECONDS:-5}"
+  LOCAL_TCP_PORT_RANGE: "${LOCAL_TCP_PORT_RANGE:-1-65535}"
+  LOCAL_UDP_PORT_RANGE: "${LOCAL_UDP_PORT_RANGE:-1-65535}"
+  SUBSCRIPTION_FETCH_TIMEOUT_SECONDS: "${SUBSCRIPTION_FETCH_TIMEOUT_SECONDS:-15}"
+  SUBSCRIPTION_MAX_BYTES: "${SUBSCRIPTION_MAX_BYTES:-1048576}"
+  SUBSCRIPTION_REDIRECT_LIMIT: "${SUBSCRIPTION_REDIRECT_LIMIT:-3}"
+  SUBSCRIPTION_ALLOW_PRIVATE_NETWORK: "${SUBSCRIPTION_ALLOW_PRIVATE_NETWORK:-false}"
+  SUBSCRIPTION_REFRESH_ENABLED: "${SUBSCRIPTION_REFRESH_ENABLED:-false}"
+  SUBSCRIPTION_REFRESH_CRON: "${SUBSCRIPTION_REFRESH_CRON:-0 3 * * *}"
+  SUBSCRIPTION_SCHEDULER_INTERVAL_SECONDS: "${SUBSCRIPTION_SCHEDULER_INTERVAL_SECONDS:-60}"
+  SHARE_RATE_LIMIT_PER_MINUTE: "${SHARE_RATE_LIMIT_PER_MINUTE:-60}"
+  BACKUP_DIR: "${BACKUP_DIR:-/app/data/backups}"
+  BACKUP_RETENTION_DAYS: "${BACKUP_RETENTION_DAYS:-30}"
+  LOG_LEVEL: "${LOG_LEVEL:-info}"
+  LOG_OUTPUT_TO_FILE: "${LOG_OUTPUT_TO_FILE:-true}"
+  LOG_ROTATION_MAX_SIZE_MB: "${LOG_ROTATION_MAX_SIZE_MB:-100}"
+  LOG_ROTATION_MAX_BACKUPS: "${LOG_ROTATION_MAX_BACKUPS:-10}"
+  LOG_ROTATION_MAX_AGE_DAYS: "${LOG_ROTATION_MAX_AGE_DAYS:-7}"
+  TZ: "${TZ:-Asia/Shanghai}"
+
 services:
   app:
     image: proxy-control-center:${IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: Dockerfile
+    container_name: proxy-control-center
     restart: unless-stopped
     network_mode: host
     environment:
-      SERVER_HOST: "0.0.0.0"
-      SERVER_PORT: "${SERVER_PORT:-8080}"
-      DATA_DIR: "/app/data"
-      STORAGE_DRIVER: "json"
-      JWT_SECRET: "${JWT_SECRET}"
-      CONFIG_ENCRYPTION_KEY: "${CONFIG_ENCRYPTION_KEY}"
-      ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
-      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
-      ENGINE_PROVIDER: "${ENGINE_PROVIDER:-sing-box}"
-      ENGINE_MODE: "${ENGINE_MODE:-render-only}"
-      ENGINE_BINARY: "${ENGINE_BINARY:-sing-box}"
-      ENGINE_CONFIG_DIR: "${ENGINE_CONFIG_DIR:-/app/data/engine}"
+      <<: *app-environment
     volumes:
       - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: proxy-control-center-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-proxy_panel}"
+      POSTGRES_USER: "${POSTGRES_USER:-proxy_panel}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      TZ: "${TZ:-Asia/Shanghai}"
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-proxy_panel} -d ${POSTGRES_DB:-proxy_panel}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: proxy-control-center-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: >
+      sh -c 'redis-server
+      --save 60 1
+      --appendonly yes
+      --appendfsync everysec
+      ${REDIS_PASSWORD:+--requirepass "$REDIS_PASSWORD"}'
+    environment:
+      REDISCLI_AUTH: "${REDIS_PASSWORD:-}"
+      TZ: "${TZ:-Asia/Shanghai}"
+    volumes:
+      - ./redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

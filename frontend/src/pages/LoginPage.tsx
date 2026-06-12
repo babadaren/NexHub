@@ -18,7 +18,7 @@ export function LoginPage({ onLogin }: { onLogin: (user: AdminUser) => void }) {
     try {
       const user = await api.login(username, password);
       onLogin(user);
-      navigate("/dashboard", { replace: true });
+      navigate(user.mustChangePassword ? "/settings" : "/dashboard", { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败");
     } finally {

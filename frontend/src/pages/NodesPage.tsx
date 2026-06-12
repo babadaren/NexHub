@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import { Plus, RefreshCw, Rss, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { Direction, NodeConfig, SubscriptionSource } from "../types";
+import type { Direction, NodeConfig, SubscriptionRefreshLog, SubscriptionSource } from "../types";
 import { StatusBadge } from "../components/Status";
 
 function subscriptionSourceLabel(subscription: SubscriptionSource) {
@@ -19,7 +19,16 @@ export function NodesPage({ direction }: { direction: Direction }) {
   const [subscriptions, setSubscriptions] = useState<SubscriptionSource[]>([]);
   const [testing, setTesting] = useState<string | undefined>();
   const [refreshingSubscription, setRefreshingSubscription] = useState<string | undefined>();
-  const [subscriptionForm, setSubscriptionForm] = useState({ name: "", url: "", content: "" });
+  const [subscriptionLog, setSubscriptionLog] = useState<SubscriptionRefreshLog | undefined>();
+  const [subscriptionForm, setSubscriptionForm] = useState({
+    name: "",
+    url: "",
+    content: "",
+    autoRefresh: false,
+    refreshCron: "0 3 * * *",
+    autoEnableNewNodes: false,
+    allowPrivateNetwork: false
+  });
   const [subscriptionError, setSubscriptionError] = useState<string | undefined>();
 
   const load = () => api.nodes(direction).then(setNodes);
@@ -59,8 +68,17 @@ export function NodesPage({ direction }: { direction: Direction }) {
         setSubscriptionError("请填写名称，并至少提供订阅 URL 或粘贴内容。");
         return;
       }
-      await api.createSubscription({ name, url: url || undefined, content: content || undefined });
-      setSubscriptionForm({ name: "", url: "", content: "" });
+      await api.createSubscription({
+        name,
+        url: url || undefined,
+        content: content || undefined,
+        sourceType: content ? "content" : "url",
+        autoRefresh: subscriptionForm.autoRefresh,
+        refreshCron: subscriptionForm.autoRefresh ? subscriptionForm.refreshCron.trim() || "0 3 * * *" : undefined,
+        autoEnableNewNodes: subscriptionForm.autoEnableNewNodes,
+        allowPrivateNetwork: subscriptionForm.allowPrivateNetwork
+      });
+      setSubscriptionForm({ name: "", url: "", content: "", autoRefresh: false, refreshCron: "0 3 * * *", autoEnableNewNodes: false, allowPrivateNetwork: false });
       await loadSubscriptions();
     } catch (error) {
       setSubscriptionError(error instanceof Error ? error.message : "订阅源创建失败");
@@ -77,6 +95,40 @@ export function NodesPage({ direction }: { direction: Direction }) {
       setSubscriptionError(error instanceof Error ? error.message : "订阅刷新失败");
     } finally {
       setRefreshingSubscription(undefined);
+    }
+  }
+
+  async function toggleSubscriptionAutoRefresh(subscription: SubscriptionSource) {
+    setSubscriptionError(undefined);
+    try {
+      await api.updateSubscription(subscription.id, {
+        autoRefresh: !subscription.autoRefresh,
+        refreshCron: subscription.refreshCron ?? "0 3 * * *"
+      });
+      await loadSubscriptions();
+    } catch (error) {
+      setSubscriptionError(error instanceof Error ? error.message : "订阅源更新失败");
+    }
+  }
+
+  async function removeSubscription(subscription: SubscriptionSource) {
+    if (!window.confirm(`删除订阅源 ${subscription.name}？已导入节点不会被删除。`)) return;
+    setSubscriptionError(undefined);
+    try {
+      await api.deleteSubscription(subscription.id);
+      if (subscriptionLog?.subscription.id === subscription.id) setSubscriptionLog(undefined);
+      await loadSubscriptions();
+    } catch (error) {
+      setSubscriptionError(error instanceof Error ? error.message : "订阅源删除失败");
+    }
+  }
+
+  async function showSubscriptionLog(id: string) {
+    setSubscriptionError(undefined);
+    try {
+      setSubscriptionLog(await api.subscriptionRefreshLog(id));
+    } catch (error) {
+      setSubscriptionError(error instanceof Error ? error.message : "刷新日志读取失败");
     }
   }
 
@@ -123,6 +175,27 @@ export function NodesPage({ direction }: { direction: Direction }) {
                 placeholder="支持 vmess/vless/trojan/ss 链接、base64 订阅、Clash YAML、Sing-box JSON"
               />
             </label>
+            <label className="checkbox-row">
+              <input type="checkbox" checked={subscriptionForm.autoRefresh} onChange={(event) => setSubscriptionForm((form) => ({ ...form, autoRefresh: event.target.checked }))} />
+              自动刷新
+            </label>
+            <label className="checkbox-row">
+              <input type="checkbox" checked={subscriptionForm.autoEnableNewNodes} onChange={(event) => setSubscriptionForm((form) => ({ ...form, autoEnableNewNodes: event.target.checked }))} />
+              测试通过后自动启用新节点
+            </label>
+            <label className="checkbox-row">
+              <input type="checkbox" checked={subscriptionForm.allowPrivateNetwork} onChange={(event) => setSubscriptionForm((form) => ({ ...form, allowPrivateNetwork: event.target.checked }))} />
+              允许内网订阅地址
+            </label>
+            <label>
+              Cron
+              <input
+                value={subscriptionForm.refreshCron}
+                onChange={(event) => setSubscriptionForm((form) => ({ ...form, refreshCron: event.target.value }))}
+                placeholder="0 3 * * *"
+                disabled={!subscriptionForm.autoRefresh}
+              />
+            </label>
             <button className="primary small" type="submit">
               <Plus size={16} />
               保存订阅源
@@ -135,6 +208,8 @@ export function NodesPage({ direction }: { direction: Direction }) {
                 <tr>
                   <th>名称</th>
                   <th>来源</th>
+                  <th>刷新策略</th>
+                  <th>导入策略</th>
                   <th>最近刷新</th>
                   <th>状态</th>
                   <th>操作</th>
@@ -145,6 +220,8 @@ export function NodesPage({ direction }: { direction: Direction }) {
                   <tr key={subscription.id}>
                     <td>{subscription.name}</td>
                     <td>{subscriptionSourceLabel(subscription)}</td>
+                    <td>{subscription.autoRefresh ? subscription.refreshCron ?? "0 3 * * *" : "手动"}</td>
+                    <td>{subscription.autoEnableNewNodes ? "测试后启用" : "新增为草稿"}{subscription.allowPrivateNetwork ? " / 允许内网" : ""}</td>
                     <td>{subscription.lastRefreshAt ? new Date(subscription.lastRefreshAt).toLocaleString() : "未刷新"}</td>
                     <td>
                       <StatusBadge status={subscription.lastRefreshStatus ?? "never"} />
@@ -155,11 +232,47 @@ export function NodesPage({ direction }: { direction: Direction }) {
                         <RefreshCw size={16} />
                         刷新
                       </button>
+                      <button className="ghost small" onClick={() => toggleSubscriptionAutoRefresh(subscription)}>
+                        {subscription.autoRefresh ? "关闭自动" : "开启自动"}
+                      </button>
+                      <button className="ghost small" onClick={() => showSubscriptionLog(subscription.id)}>
+                        日志
+                      </button>
+                      <button className="danger small" onClick={() => removeSubscription(subscription)}>
+                        <Trash2 size={16} />
+                        删除
+                      </button>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          )}
+          {subscriptionLog && (
+            <div className="subscription-log">
+              <div className="list-header compact">
+                <div>
+                  <h3>{subscriptionLog.subscription.name} 刷新日志</h3>
+                  <p>最近刷新审计和实时事件。</p>
+                </div>
+                <button className="ghost small" onClick={() => setSubscriptionLog(undefined)}>
+                  关闭
+                </button>
+              </div>
+              <div className="import-preview-list">
+                {subscriptionLog.audits.length === 0 ? (
+                  <p className="muted">暂无刷新日志。</p>
+                ) : (
+                  subscriptionLog.audits.slice(0, 6).map((audit) => (
+                    <div key={audit.id} className="import-preview-item">
+                      <strong>{audit.action}</strong>
+                      <span>{new Date(audit.createdAt).toLocaleString()}</span>
+                      <span>{audit.message}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
           )}
         </section>
       )}
@@ -190,7 +303,10 @@ export function NodesPage({ direction }: { direction: Direction }) {
               {nodes.map((node) => (
                 <tr key={node.id}>
                   <td>
-                    <Link to={`/${direction}-nodes/${node.id}`}>{node.name}</Link>
+                    <div className="name-cell">
+                      <Link to={`/${direction}-nodes/${node.id}`}>{node.name}</Link>
+                      {direction === "remote" && node.sourceMissing && <span className="tag warning small">订阅缺失</span>}
+                    </div>
                   </td>
                   <td>{node.protocol.toUpperCase()}</td>
                   <td>{direction === "remote" ? `${node.safeSummary.server}:${node.safeSummary.port}` : String(node.safeSummary.listen)}</td>

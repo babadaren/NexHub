@@ -1,4 +1,11 @@
-proxy.example.com {
+admin.example.com {
   encode gzip
-  reverse_proxy 127.0.0.1:8080
+  reverse_proxy 127.0.0.1:8080 {
+    header_up X-Forwarded-Proto {scheme}
+    header_up X-Forwarded-Host {host}
+  }
 }
+
+# Raw TCP/UDP proxy ports are not handled by this HTTP reverse proxy.
+# Expose local-node ports with docker-compose.local.yml mappings, or use
+# docker-compose.host.yml on Linux when arbitrary ports are required.
