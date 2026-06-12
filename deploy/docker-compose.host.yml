@@ -5,6 +5,7 @@ x-app-environment: &app-environment
   SERVER_HOST: "${BIND_HOST:-127.0.0.1}"
   SERVER_PORT: "${SERVER_PORT:-8080}"
   SERVER_MODE: "${SERVER_MODE:-release}"
+  NETWORK_MODE: "host"
   PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
   DATA_DIR: "/app/data"
   STORAGE_DRIVER: "${STORAGE_DRIVER:-postgres}"
@@ -78,6 +79,15 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:5432:5432"
+    entrypoint:
+      - sh
+      - -c
+      - |
+        test -n "$$POSTGRES_PASSWORD" || {
+          echo "POSTGRES_PASSWORD is required for PostgreSQL. Run deploy/install.sh or set POSTGRES_PASSWORD in .env before docker compose up." >&2;
+          exit 1;
+        };
+        exec docker-entrypoint.sh postgres
     environment:
       POSTGRES_DB: "${POSTGRES_DB:-proxy_panel}"
       POSTGRES_USER: "${POSTGRES_USER:-proxy_panel}"
@@ -98,11 +108,15 @@ services:
     ports:
       - "127.0.0.1:6379:6379"
     command: >
-      sh -c 'redis-server
+      sh -c 'test -n "$$REDIS_PASSWORD" || {
+      echo "REDIS_PASSWORD is required when Redis is mapped to host 127.0.0.1:6379" >&2;
+      exit 1;
+      };
+      redis-server
       --save 60 1
       --appendonly yes
       --appendfsync everysec
-      ${REDIS_PASSWORD:+--requirepass "$REDIS_PASSWORD"}'
+      --requirepass "$$REDIS_PASSWORD"'
     environment:
       REDISCLI_AUTH: "${REDIS_PASSWORD:-}"
       TZ: "${TZ:-Asia/Shanghai}"

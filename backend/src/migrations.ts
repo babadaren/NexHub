@@ -3,6 +3,15 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Pool } from "pg";
 
+export class MigrationChecksumError extends Error {
+  constructor(readonly version: string) {
+    super(
+      `Migration checksum changed for ${version}. Published migration files must not be edited in place. Stop the app, restore the last good backup, or upgrade with a compensating migration from a fixed release.`
+    );
+    this.name = "MigrationChecksumError";
+  }
+}
+
 export async function runMigrations(pool: Pool, migrationsDir = path.resolve(process.cwd(), "backend", "migrations")) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -20,7 +29,7 @@ export async function runMigrations(pool: Pool, migrationsDir = path.resolve(pro
 
     if (existing.rows[0]) {
       if (existing.rows[0].checksum !== checksum) {
-        throw new Error(`migration checksum changed: ${file}`);
+        throw new MigrationChecksumError(file);
       }
       continue;
     }

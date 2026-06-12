@@ -32,7 +32,8 @@ const child = spawn("node", ["backend/dist/server.js"], {
     ADMIN_PASSWORD: "admin12345",
     JWT_SECRET: "locks-smoke-secret",
     CONFIG_ENCRYPTION_KEY: "locks-smoke-encryption-key",
-    NODE_TEST_DELAY_MS: "1500"
+    NODE_TEST_DELAY_MS: "1500",
+    SUBSCRIPTION_REFRESH_DELAY_MS: "1500"
   }
 });
 
@@ -79,6 +80,36 @@ try {
   const conflict = await conflictResponse.json();
   if (conflict.code !== "NODE_TEST_LOCKED" || !conflict.suggestion) {
     throw new Error(`lock conflict did not return structured guidance: ${JSON.stringify(conflict)}`);
+  }
+  const events = await request("/api/dashboard/events", { headers: auth });
+  if (!events.some((event) => event.action === "node.test.locked" && event.targetId === node.id && event.metadata?.code === "NODE_TEST_LOCKED")) {
+    throw new Error(`node test lock audit was not recorded: ${JSON.stringify(events)}`);
+  }
+
+  const subscription = await request("/api/subscriptions", {
+    method: "POST",
+    headers: { ...auth, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: "Lock-Subscription",
+      content: "vless://77777777-7777-4777-8777-777777777777@lock-sub.example.com:443?security=tls&type=tcp#LockSub"
+    })
+  });
+  const refreshResponses = await Promise.all([
+    raw(`/api/subscriptions/${subscription.id}/refresh`, { method: "POST", headers: auth }),
+    raw(`/api/subscriptions/${subscription.id}/refresh`, { method: "POST", headers: auth })
+  ]);
+  const refreshStatuses = refreshResponses.map((response) => response.status).sort();
+  if (refreshStatuses[0] !== 200 || refreshStatuses[1] !== 409) {
+    throw new Error(`expected one successful refresh and one conflict, got ${refreshStatuses.join(",")}`);
+  }
+  const refreshConflictResponse = refreshResponses.find((response) => response.status === 409);
+  const refreshConflict = await refreshConflictResponse.json();
+  if (refreshConflict.code !== "SUBSCRIPTION_REFRESH_LOCKED" || !refreshConflict.suggestion) {
+    throw new Error(`subscription refresh lock conflict did not return structured guidance: ${JSON.stringify(refreshConflict)}`);
+  }
+  const refreshEvents = await request("/api/dashboard/events", { headers: auth });
+  if (!refreshEvents.some((event) => event.action === "subscription.refresh.locked" && event.targetId === subscription.id && event.metadata?.code === "SUBSCRIPTION_REFRESH_LOCKED")) {
+    throw new Error(`subscription refresh lock audit was not recorded: ${JSON.stringify(refreshEvents)}`);
   }
 
   console.log("locks smoke ok");

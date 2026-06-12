@@ -3,6 +3,7 @@ x-app-environment: &app-environment
   SERVER_HOST: "0.0.0.0"
   SERVER_PORT: "8080"
   SERVER_MODE: "${SERVER_MODE:-release}"
+  NETWORK_MODE: "${NETWORK_MODE:-bridge}"
   PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
   DATA_DIR: "/app/data"
   STORAGE_DRIVER: "${STORAGE_DRIVER:-postgres}"
@@ -79,6 +80,15 @@ services:
     image: postgres:15-alpine
     container_name: proxy-control-center-postgres
     restart: unless-stopped
+    entrypoint:
+      - sh
+      - -c
+      - |
+        test -n "$$POSTGRES_PASSWORD" || {
+          echo "POSTGRES_PASSWORD is required for PostgreSQL. Run deploy/install.sh or set POSTGRES_PASSWORD in .env before docker compose up." >&2;
+          exit 1;
+        };
+        exec docker-entrypoint.sh postgres
     environment:
       POSTGRES_DB: "${POSTGRES_DB:-proxy_panel}"
       POSTGRES_USER: "${POSTGRES_USER:-proxy_panel}"

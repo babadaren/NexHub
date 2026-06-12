@@ -2,6 +2,8 @@
 
 极简代理节点控制台。项目根据 `proxy_control_center_full_design_dev_spec.md` 和 `wireframes/` 设计图实现。
 
+当前发布说明见 `RELEASE_NOTES.md`。生产式部署应固定不可变镜像标签，例如 `IMAGE_TAG=v0.1.0`；`latest` 只用于本地试用。
+
 ## 本地开发
 
 ```bash
@@ -25,6 +27,12 @@ cp .env.example .env
 docker compose up -d
 ```
 
+版本化安装包应从同一个发布标签获取 `install.sh`、Compose、`.env.example` 和部署 README，例如：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/v0.1.0/deploy/install.sh -o install.sh
+```
+
 `docker-compose.local.yml` 默认使用 PostgreSQL 和 Redis：
 
 - `STORAGE_DRIVER=postgres` 时启动自动执行 `backend/migrations/*.sql`。
@@ -46,10 +54,29 @@ pnpm smoke
 pnpm smoke:engine
 ```
 
-如果有可用 PostgreSQL，可以额外运行：
+完整串行验收可执行：
 
 ```bash
+pnpm smoke:all -- --list
+pnpm smoke:all
+pnpm smoke:all -- --require-postgres
+pnpm smoke:all -- --require-postgres --require-compose
+```
+
+真实 PostgreSQL smoke 会在未提供连接串且 Docker 可用时自动启动临时 PostgreSQL；本地 Docker 不可用时会跳过，CI 或正式验收可设置 `POSTGRES_SMOKE_REQUIRED=true` 让缺失真实 PG 直接失败。如果要使用已有数据库，可以显式传入连接串：
+
+```bash
+pnpm smoke:postgres
+POSTGRES_SMOKE_REQUIRED=true pnpm smoke:postgres
 POSTGRES_SMOKE_URL=postgres://user:password@localhost:5432/proxy_panel pnpm smoke:postgres
+```
+
+Docker Compose 启动验收可以单独执行。脚本会使用临时目录、随机宿主机端口和独立 project name，验证镜像构建、app/PostgreSQL/Redis 启动、`/health`、`/ready`、首次随机密码日志和清理流程：
+
+```bash
+pnpm smoke:compose
+pnpm smoke:compose-required
+COMPOSE_SMOKE_REQUIRED=true pnpm smoke:compose
 ```
 
 ## 目录

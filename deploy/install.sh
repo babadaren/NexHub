@@ -23,12 +23,33 @@ confirm_non_empty_dir() {
   if [ "${PCC_INSTALL_ASSUME_YES:-}" = "true" ]; then
     return
   fi
-  printf "Existing deployment files were found in %s. Continue without overwriting user values? [y/N] " "$(pwd)"
+  printf "Existing deployment files were found in %s. Continue preparing deployment? Non-empty .env values are preserved; docker-compose.yml is backed up before installing the default local template. [y/N] " "$(pwd)"
   read -r answer
   case "$answer" in
     y|Y|yes|YES) ;;
     *) echo "aborted"; exit 1 ;;
   esac
+}
+
+install_compose_file() {
+  compose_source="${PCC_INSTALL_COMPOSE_SOURCE:-docker-compose.local.yml}"
+  if [ ! -f "$compose_source" ]; then
+    echo "missing compose template: $compose_source" >&2
+    exit 1
+  fi
+  if [ -f docker-compose.yml ]; then
+    if [ "${PCC_INSTALL_KEEP_COMPOSE:-}" = "true" ]; then
+      echo "Keeping existing docker-compose.yml because PCC_INSTALL_KEEP_COMPOSE=true"
+      return
+    fi
+    if cmp -s "$compose_source" docker-compose.yml; then
+      return
+    fi
+    backup="docker-compose.yml.bak.$(date +%Y%m%d%H%M%S).$$"
+    cp docker-compose.yml "$backup"
+    echo "Existing docker-compose.yml backed up to $backup"
+  fi
+  cp "$compose_source" docker-compose.yml
 }
 
 set_env_value() {
@@ -66,9 +87,7 @@ set_env_value JWT_SECRET "$(secret)"
 set_env_value CONFIG_ENCRYPTION_KEY "$(secret)"
 chmod 600 .env 2>/dev/null || true
 
-if [ ! -f docker-compose.yml ]; then
-  cp docker-compose.local.yml docker-compose.yml
-fi
+install_compose_file
 
 cat <<EOF
 Deployment directory is ready.

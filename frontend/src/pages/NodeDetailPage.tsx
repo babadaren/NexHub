@@ -127,12 +127,22 @@ export function NodeDetailPage({ direction }: { direction: Direction }) {
 
   async function toggleEnabled() {
     if (!id || !node) return;
+    if (direction === "local" && node.enabled) {
+      openStopConfirm();
+      return;
+    }
     const currentNode = node;
     setEditMessage("");
     const updated = currentNode.enabled ? await api.disableNode(direction, id) : await api.enableNode(direction, id);
     setNode((current) => current && { ...current, ...updated });
     setEditMessage(updated.enabled ? "节点已启用" : "节点已停用");
     await load();
+  }
+
+  function openStopConfirm() {
+    setStopOpen(true);
+    setStopText("");
+    setStopMessage("");
   }
 
   async function confirmStop() {
@@ -242,11 +252,7 @@ export function NodeDetailPage({ direction }: { direction: Direction }) {
               </button>
               <button
                 className="danger"
-                onClick={() => {
-                  setStopOpen(true);
-                  setStopText("");
-                  setStopMessage("");
-                }}
+                onClick={openStopConfirm}
               >
                 <Square size={18} />
                 停止

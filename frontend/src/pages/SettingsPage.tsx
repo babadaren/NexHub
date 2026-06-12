@@ -10,6 +10,14 @@ export function SettingsPage({ user, onUserChange }: { user: AdminUser; onUserCh
   const [backups, setBackups] = useState<BackupSummary[]>([]);
   const [message, setMessage] = useState("");
   const [password, setPassword] = useState("");
+  const [pendingRestoreBackup, setPendingRestoreBackup] = useState<BackupSummary>();
+  const [restoreConfirmText, setRestoreConfirmText] = useState("");
+  const [restoreConfirmMessage, setRestoreConfirmMessage] = useState("");
+  const [restoringBackup, setRestoringBackup] = useState(false);
+  const [restartConfirmOpen, setRestartConfirmOpen] = useState(false);
+  const [restartConfirmText, setRestartConfirmText] = useState("");
+  const [restartConfirmMessage, setRestartConfirmMessage] = useState("");
+  const [restartingSystem, setRestartingSystem] = useState(false);
 
   useEffect(() => {
     api.systemStatus().then(setStatus);
@@ -24,8 +32,12 @@ export function SettingsPage({ user, onUserChange }: { user: AdminUser; onUserCh
     api.backups().then(setBackups);
   }, []);
 
+  function errorMessage(error: unknown, fallback: string) {
+    return error instanceof Error ? error.message : fallback;
+  }
+
   function showError(error: unknown, fallback: string) {
-    setMessage(error instanceof Error ? error.message : fallback);
+    setMessage(errorMessage(error, fallback));
   }
 
   async function backup() {
@@ -38,17 +50,28 @@ export function SettingsPage({ user, onUserChange }: { user: AdminUser; onUserCh
     }
   }
 
-  async function restoreBackup(file: string) {
-    const confirmed = window.confirm("恢复会用该备份替换当前配置。系统会先自动创建一份恢复前备份。确认继续？");
-    if (!confirmed) return;
+  function openRestoreBackup(backup: BackupSummary) {
+    setPendingRestoreBackup(backup);
+    setRestoreConfirmText("");
+    setRestoreConfirmMessage("");
+  }
+
+  async function confirmRestoreBackup() {
+    if (!pendingRestoreBackup || restoreConfirmText !== "RESTORE") return;
+    setRestoringBackup(true);
+    setRestoreConfirmMessage("");
     try {
-      const result = await api.restoreBackup(file);
+      const result = await api.restoreBackup(pendingRestoreBackup.file);
+      setPendingRestoreBackup(undefined);
+      setRestoreConfirmText("");
       setMessage(`${result.message}，恢复前备份：${result.preRestoreFile}`);
       const [nextStatus, nextBackups] = await Promise.all([api.systemStatus(), api.backups()]);
       setStatus(nextStatus);
       setBackups(nextBackups);
     } catch (error) {
-      showError(error, "恢复失败");
+      setRestoreConfirmMessage(errorMessage(error, "恢复失败"));
+    } finally {
+      setRestoringBackup(false);
     }
   }
 
@@ -61,16 +84,27 @@ export function SettingsPage({ user, onUserChange }: { user: AdminUser; onUserCh
     }
   }
 
-  async function restartSystem() {
-    const confirmed = window.confirm("将重启代理核心运行时，不会重启管理后台。确认继续？");
-    if (!confirmed) return;
+  function openRestartConfirm() {
+    setRestartConfirmOpen(true);
+    setRestartConfirmText("");
+    setRestartConfirmMessage("");
+  }
+
+  async function confirmRestartSystem() {
+    if (restartConfirmText !== "RESTART") return;
+    setRestartingSystem(true);
+    setRestartConfirmMessage("");
     try {
       const result = await api.restartSystem();
+      setRestartConfirmOpen(false);
+      setRestartConfirmText("");
       setMessage(result.result.message ?? (result.result.skipped ? "当前为 render-only 模式，代理核心重启已跳过" : "代理核心已重启"));
       setStatus(await api.systemStatus());
     } catch (error) {
-      showError(error, "代理核心重启失败");
+      setRestartConfirmMessage(errorMessage(error, "代理核心重启失败"));
       setStatus(await api.systemStatus());
+    } finally {
+      setRestartingSystem(false);
     }
   }
 
@@ -96,6 +130,22 @@ export function SettingsPage({ user, onUserChange }: { user: AdminUser; onUserCh
       setMessage("数据保留策略已保存");
     } catch (error) {
       showError(error, "数据保留策略保存失败");
+    }
+  }
+
+  async function toggleAllowPrivateSubscriptions() {
+    const allowPrivateSubscriptions = !Boolean(settings?.security?.allowPrivateSubscriptions);
+    try {
+      const next = await api.updateSystemSettings({
+        security: {
+          ...settings?.security,
+          allowPrivateSubscriptions
+        }
+      });
+      setSettings(next);
+      setMessage(allowPrivateSubscriptions ? "已允许订阅源访问内网地址" : "已关闭订阅源内网地址访问");
+    } catch (error) {
+      showError(error, "订阅安全设置保存失败");
     }
   }
 
@@ -156,6 +206,10 @@ export function SettingsPage({ user, onUserChange }: { user: AdminUser; onUserCh
             </dd>
             <dt>App</dt>
             <dd>{status?.deployment.app ?? "加载中"}</dd>
+            <dt>部署模式</dt>
+            <dd>{status?.deployment.mode ?? "加载中"}</dd>
+            <dt>网络模式</dt>
+            <dd>{status?.deployment.networkMode ?? "加载中"}</dd>
             <dt>PostgreSQL</dt>
             <dd>{status?.deployment.postgres ?? "加载中"}</dd>
             <dt>Redis</dt>
@@ -178,11 +232,16 @@ export function SettingsPage({ user, onUserChange }: { user: AdminUser; onUserCh
               <Download size={18} />
               备份数据
             </button>
-            <button className="ghost" onClick={restartSystem}>
+            <button className="ghost" onClick={openRestartConfirm}>
               <RotateCcw size={18} />
               重启代理核心
             </button>
           </div>
+          {status?.deployment.advancedNetwork && (
+            <div className="notice security-notice">
+              高级网络模式已开启。Host network 会改变容器网络隔离边界，请确认防火墙、Redis 密码和本地节点监听端口只暴露给可信网络。
+            </div>
+          )}
         </div>
 
         <div className="panel">
@@ -227,7 +286,98 @@ export function SettingsPage({ user, onUserChange }: { user: AdminUser; onUserCh
             <dd>{formatDate(status?.engine?.lastRenderAt)}</dd>
           </dl>
         </div>
+
+        <div className="panel">
+          <h2>
+            <ShieldCheck size={22} />
+            订阅安全边界
+          </h2>
+          <p>默认阻止订阅源访问内网和本机地址，仅在明确信任订阅地址时开启。</p>
+          <label className="checkbox-row">
+            <input type="checkbox" checked={Boolean(settings?.security?.allowPrivateSubscriptions)} onChange={toggleAllowPrivateSubscriptions} />
+            允许订阅源访问内网地址
+          </label>
+          <div className="notice security-notice">
+            开启后，所有订阅源刷新都可以访问 127.0.0.1、局域网和私有网段；单个订阅源仍可在节点导入页单独授权。
+          </div>
+        </div>
       </section>
+
+      {pendingRestoreBackup && (
+        <section className="panel danger-confirm-panel">
+          <h2>确认恢复备份</h2>
+          <p>恢复会用该备份替换当前配置。系统会先自动创建恢复前备份。确认要恢复时请输入 RESTORE。</p>
+          <dl className="kv">
+            <dt>备份文件</dt>
+            <dd>{pendingRestoreBackup.file}</dd>
+            <dt>创建时间</dt>
+            <dd>{new Date(pendingRestoreBackup.createdAt).toLocaleString()}</dd>
+            <dt>节点/订阅</dt>
+            <dd>
+              {pendingRestoreBackup.manifest.state.nodes} / {pendingRestoreBackup.manifest.state.subscriptions}
+            </dd>
+            <dt>备份大小</dt>
+            <dd>{formatBytes(pendingRestoreBackup.sizeBytes)}</dd>
+          </dl>
+          <label>
+            确认文本
+            <input value={restoreConfirmText} onChange={(event) => setRestoreConfirmText(event.target.value)} placeholder="RESTORE" />
+          </label>
+          {restoreConfirmMessage && <div className="notice danger-notice">{restoreConfirmMessage}</div>}
+          <div className="form-actions">
+            <button className="danger" onClick={confirmRestoreBackup} disabled={restoreConfirmText !== "RESTORE" || restoringBackup}>
+              {restoringBackup ? "恢复中..." : "确认恢复"}
+            </button>
+            <button
+              className="ghost"
+              onClick={() => {
+                setPendingRestoreBackup(undefined);
+                setRestoreConfirmText("");
+                setRestoreConfirmMessage("");
+              }}
+              disabled={restoringBackup}
+            >
+              取消
+            </button>
+          </div>
+        </section>
+      )}
+
+      {restartConfirmOpen && (
+        <section className="panel danger-confirm-panel">
+          <h2>确认重启代理核心</h2>
+          <p>重启只影响代理核心运行时，不会重启管理后台。确认要重启时请输入 RESTART。</p>
+          <dl className="kv">
+            <dt>核心模式</dt>
+            <dd>{String(status?.engine?.runtime?.mode ?? "未知")}</dd>
+            <dt>核心进程</dt>
+            <dd>{status?.engine?.runtime?.running ? `运行中 #${String(status.engine.runtime.pid ?? "")}` : "未运行"}</dd>
+            <dt>当前配置</dt>
+            <dd>{String(status?.engine?.currentPath ?? "尚未生成")}</dd>
+          </dl>
+          <label>
+            确认文本
+            <input value={restartConfirmText} onChange={(event) => setRestartConfirmText(event.target.value)} placeholder="RESTART" />
+          </label>
+          {restartConfirmMessage && <div className="notice danger-notice">{restartConfirmMessage}</div>}
+          <div className="form-actions">
+            <button className="danger" onClick={confirmRestartSystem} disabled={restartConfirmText !== "RESTART" || restartingSystem}>
+              {restartingSystem ? "重启中..." : "确认重启"}
+            </button>
+            <button
+              className="ghost"
+              onClick={() => {
+                setRestartConfirmOpen(false);
+                setRestartConfirmText("");
+                setRestartConfirmMessage("");
+              }}
+              disabled={restartingSystem}
+            >
+              取消
+            </button>
+          </div>
+        </section>
+      )}
 
       {message && <div className="notice">{message}</div>}
 
@@ -292,7 +442,7 @@ export function SettingsPage({ user, onUserChange }: { user: AdminUser; onUserCh
                   </td>
                   <td>{backup.containsSecrets ? "包含密钥和节点凭据，请妥善保管" : "不含敏感信息"}</td>
                   <td>
-                    <button className="ghost small" onClick={() => restoreBackup(backup.file)}>
+                    <button className="ghost small" onClick={() => openRestoreBackup(backup)}>
                       恢复
                     </button>
                   </td>

@@ -17,6 +17,10 @@ async function request(pathname, options = {}) {
   return response.status === 204 ? undefined : response.json();
 }
 
+async function rawRequest(pathname, options = {}) {
+  return fetch(`http://127.0.0.1:${port}${pathname}`, options);
+}
+
 const child = spawn("node", ["backend/dist/server.js"], {
   cwd: root,
   stdio: ["ignore", "pipe", "pipe"],
@@ -52,6 +56,31 @@ try {
   });
   const auth = { Authorization: `Bearer ${login.token}`, "Content-Type": "application/json" };
   const authNoBody = { Authorization: `Bearer ${login.token}` };
+
+  const dashboardHistory = await request("/api/dashboard/history?days=7", { headers: authNoBody });
+  if (dashboardHistory.days !== 7 || !Array.isArray(dashboardHistory.daily)) {
+    throw new Error(`dashboard history alias did not return history summary: ${JSON.stringify(dashboardHistory)}`);
+  }
+
+  const emptySubscriptionResponse = await rawRequest("/api/subscriptions", {
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({
+      name: "Missing source"
+    })
+  });
+  if (emptySubscriptionResponse.status !== 400) {
+    throw new Error(`empty subscription source returned ${emptySubscriptionResponse.status}: ${await emptySubscriptionResponse.text()}`);
+  }
+  const emptySubscriptionError = await emptySubscriptionResponse.json();
+  if (
+    emptySubscriptionError.code !== "VALIDATION_ERROR" ||
+    emptySubscriptionError.field !== "url" ||
+    !emptySubscriptionError.fields?.includes("url") ||
+    !emptySubscriptionError.fields?.includes("content")
+  ) {
+    throw new Error(`empty subscription source did not return url/content field guidance: ${JSON.stringify(emptySubscriptionError)}`);
+  }
 
   const subscription = await request("/api/subscriptions", {
     method: "POST",
@@ -144,6 +173,18 @@ try {
   if (!text.includes("event: summary") || !text.includes("\"now\"") || !text.includes("\"points\"")) {
     throw new Error(`SSE stream did not send summary event: ${text}`);
   }
+
+  await request("/api/auth/password", {
+    method: "PATCH",
+    headers: auth,
+    body: JSON.stringify({ password: "admin123456" })
+  });
+  const changedLogin = await request("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "admin", password: "admin123456" })
+  });
+  if (!changedLogin.token) throw new Error("auth password alias did not persist password change");
 
   console.log("api gap smoke ok");
 } finally {

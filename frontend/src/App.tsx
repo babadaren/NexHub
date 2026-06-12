@@ -1,6 +1,6 @@
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { Suspense, lazy, useEffect, useState } from "react";
-import { api, getToken } from "./api";
+import { api, clearToken, getToken } from "./api";
 import type { AdminUser } from "./types";
 import { AppShell } from "./components/AppShell";
 
@@ -33,7 +33,10 @@ export function App() {
     api
       .me()
       .then(setUser)
-      .catch(() => setUser(undefined))
+      .catch(() => {
+        clearToken();
+        setUser(undefined);
+      })
       .finally(() => setChecked(true));
   }, []);
 

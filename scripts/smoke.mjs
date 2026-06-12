@@ -6,6 +6,7 @@ import path from "node:path";
 const root = path.resolve(import.meta.dirname, "..");
 const dataDir = await mkdtemp(path.join(tmpdir(), "pcc-smoke-"));
 const port = 19080;
+const sensitiveNeedles = ["admin12345", "smoke-secret", "CONFIG_ENCRYPTION_KEY", "JWT_SECRET", "DATABASE_URL", "ADMIN_PASSWORD"];
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -24,6 +25,13 @@ async function rawRequest(pathname, options = {}) {
   return fetch(`http://127.0.0.1:${port}${pathname}`, options);
 }
 
+function assertNoSensitiveValue(name, payload) {
+  const text = JSON.stringify(payload);
+  for (const secret of sensitiveNeedles) {
+    if (text.includes(secret)) throw new Error(`${name} leaked sensitive value: ${secret}`);
+  }
+}
+
 const child = spawn("node", ["backend/dist/server.js"], {
   cwd: root,
   stdio: ["ignore", "pipe", "pipe"],
@@ -34,6 +42,7 @@ const child = spawn("node", ["backend/dist/server.js"], {
     DATA_DIR: dataDir,
     ADMIN_PASSWORD: "admin12345",
     JWT_SECRET: "smoke-secret",
+    NETWORK_MODE: "bridge",
     PUBLIC_BASE_URL: "https://public.example.test/panel/"
   }
 });
@@ -88,22 +97,32 @@ try {
   if (!ready.ready || ready.checks.app.status !== "ok" || ready.checks.engine.status !== "ok") {
     throw new Error("ready endpoint did not report expected healthy state");
   }
+  assertNoSensitiveValue("ready endpoint", ready);
 
   const installStatus = await request("/api/install/status");
   if (installStatus.adminUsername !== "admin" || installStatus.loginPath !== "/login" || !installStatus.passwordCommand.includes("docker compose logs app")) {
     throw new Error("install status did not include expected first-run guidance");
   }
-  const installStatusText = JSON.stringify(installStatus);
-  for (const secret of ["admin12345", "smoke-secret", "CONFIG_ENCRYPTION_KEY", "JWT_SECRET", "DATABASE_URL"]) {
-    if (installStatusText.includes(secret)) throw new Error(`install status leaked sensitive value: ${secret}`);
+  assertNoSensitiveValue("install status", installStatus);
+
+  const unauthenticatedSystemStatus = await rawRequest("/api/system/status");
+  if (unauthenticatedSystemStatus.status !== 401) {
+    throw new Error(`system status allowed unauthenticated access: ${unauthenticatedSystemStatus.status}`);
   }
 
   const systemStatus = await request("/api/system/status", { headers: authNoBody });
+  assertNoSensitiveValue("system status", systemStatus);
   if (!systemStatus.ready || systemStatus.ports.localTcpPortRange !== "20000-20100" || !systemStatus.storage.dataDir) {
     throw new Error("system status did not include deployment and port metadata");
   }
   if (systemStatus.deployment.mode !== "development" || systemStatus.storage.releaseMode !== false) {
     throw new Error("system status did not expose expected server mode");
+  }
+  if (systemStatus.deployment.networkMode !== "bridge" || systemStatus.deployment.advancedNetwork !== false) {
+    throw new Error(`system status did not expose default bridge network mode: ${JSON.stringify(systemStatus.deployment)}`);
+  }
+  if (systemStatus.deployment.app !== "ok" || systemStatus.deployment.postgres !== "json-dev" || typeof systemStatus.deployment.redis !== "string" || typeof systemStatus.deployment.engine !== "string") {
+    throw new Error(`system status did not expose explicit deployment components: ${JSON.stringify(systemStatus.deployment)}`);
   }
   if (!systemStatus.disk.path || systemStatus.checks.migrations.status !== "ok") {
     throw new Error("system status did not include disk or migration checks");
@@ -335,6 +354,27 @@ try {
   const blockedEnableError = await blockedEnable.json();
   if (blockedEnableError.code !== "NODE_ENABLE_BLOCKED" || !blockedEnableError.message.includes("Docker 宿主机") || !blockedEnableError.suggestion) {
     throw new Error(`out-of-range local node enable did not return structured guidance: ${JSON.stringify(blockedEnableError)}`);
+  }
+
+  const blockedRestart = await rawRequest(`/api/local-nodes/${blockedLocal.id}/restart`, {
+    method: "POST",
+    headers: authNoBody
+  });
+  if (blockedRestart.status !== 400) throw new Error("out-of-range local node restart was not blocked");
+  const blockedRestartError = await blockedRestart.json();
+  if (blockedRestartError.code !== "LOCAL_NODE_RESTART_BLOCKED" || !blockedRestartError.message.includes("Docker 宿主机") || !blockedRestartError.suggestion) {
+    throw new Error(`out-of-range local node restart did not return structured guidance: ${JSON.stringify(blockedRestartError)}`);
+  }
+
+  const blockedNodeEvents = await request("/api/dashboard/events", { headers: authNoBody });
+  for (const [action, code] of [
+    ["node.start.failed", "LOCAL_NODE_START_BLOCKED"],
+    ["node.enable.failed", "NODE_ENABLE_BLOCKED"],
+    ["node.restart.failed", "LOCAL_NODE_RESTART_BLOCKED"]
+  ]) {
+    if (!blockedNodeEvents.some((event) => event.action === action && event.targetId === blockedLocal.id && event.metadata?.code === code)) {
+      throw new Error(`blocked local node audit event missing ${action}: ${JSON.stringify(blockedNodeEvents)}`);
+    }
   }
 
   const stoppedLocal = await request(`/api/local-nodes/${localNode.id}/stop`, {

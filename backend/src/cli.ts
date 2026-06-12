@@ -54,6 +54,8 @@ async function main() {
           deployment: {
             app: "ok",
             mode: config.serverMode,
+            networkMode: config.networkMode,
+            advancedNetwork: config.networkMode === "host",
             releaseMode: config.releaseMode,
             postgres: store.driver === "postgres" ? "ok" : "json-dev",
             redis: redisRuntime.status,

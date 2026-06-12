@@ -34,7 +34,7 @@ const child = spawn("node", ["backend/dist/server.js"], {
     ADMIN_PASSWORD: "admin12345",
     JWT_SECRET: "backup-cleanup-smoke-secret",
     CONFIG_ENCRYPTION_KEY: "backup-cleanup-smoke-encryption-key",
-    BACKUP_RETENTION_DAYS: "1"
+    BACKUP_RETENTION_DAYS: "0"
   }
 });
 

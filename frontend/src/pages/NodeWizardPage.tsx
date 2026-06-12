@@ -105,10 +105,18 @@ export function NodeWizardPage({ direction }: { direction: Direction }) {
     if (!name || name === "Home-Proxy" || presetNames.includes(name)) setName(option.label.replace("用", ""));
   }
 
+  function chooseProtocol(nextProtocol: string) {
+    setProtocol(nextProtocol);
+    if (nextProtocol !== "smart" && !credentialEdited) {
+      setCredential(generateCredential(nextProtocol));
+    }
+  }
+
   function generateCredential(nextProtocol = protocol) {
     if (nextProtocol === "vless") return "11111111-1111-4111-8111-111111111111";
-    if (nextProtocol === "trojan") return "change-me-strong-password";
+    if (nextProtocol === "trojan" || nextProtocol === "hysteria2") return "change-me-strong-password";
     if (nextProtocol === "shadowsocks") return "change-me-ss-password";
+    if (nextProtocol === "wireguard") return "change-me-wireguard-private-key";
     return "change-me";
   }
 
@@ -244,7 +252,7 @@ export function NodeWizardPage({ direction }: { direction: Direction }) {
           ) : (
             <div className="protocol-grid">
               {protocols.map(([value, label, hint]) => (
-                <button key={value} className={protocol === value ? "protocol selected" : "protocol"} onClick={() => setProtocol(value)}>
+                <button key={value} className={protocol === value ? "protocol selected" : "protocol"} onClick={() => chooseProtocol(value)}>
                   <strong>{label}</strong>
                   <span>{hint}</span>
                 </button>
@@ -259,7 +267,7 @@ export function NodeWizardPage({ direction }: { direction: Direction }) {
           {direction === "local" && advancedOpen && (
             <div className="protocol-grid">
               {protocols.map(([value, label, hint]) => (
-                <button key={value} className={protocol === value ? "protocol selected" : "protocol"} onClick={() => setProtocol(value)}>
+                <button key={value} className={protocol === value ? "protocol selected" : "protocol"} onClick={() => chooseProtocol(value)}>
                   <strong>{label}</strong>
                   <span>{hint}</span>
                 </button>

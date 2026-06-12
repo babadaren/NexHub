@@ -2,18 +2,22 @@
 
 FROM node:22-alpine AS deps
 WORKDIR /app
-RUN corepack enable
+ENV CI=true
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+RUN corepack enable && corepack prepare pnpm@10.29.3 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY backend/package.json backend/package.json
 COPY frontend/package.json frontend/package.json
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm fetch --frozen-lockfile --store-dir=/pnpm/store --fetch-retries=5 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=120000 --fetch-timeout=300000 --network-concurrency=8
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm install --frozen-lockfile --offline --store-dir=/pnpm/store
 
 FROM deps AS build
 WORKDIR /app
 COPY backend backend
 COPY frontend frontend
 RUN pnpm build
-RUN pnpm --filter @proxy-control-center/backend --prod deploy --legacy /prod
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm --filter @proxy-control-center/backend --prod deploy --legacy /prod --offline --store-dir=/pnpm/store
 
 FROM node:22-alpine AS runtime
 WORKDIR /app

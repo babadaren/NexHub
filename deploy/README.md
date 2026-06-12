@@ -2,6 +2,14 @@
 
 生产部署推荐 Linux + Docker Compose。Windows 只建议用于 Docker Desktop 试用，不承诺一键脚本。
 
+本文档适配镜像标签 `v0.1.0`，要求 Docker Compose v2。生产部署请固定 `IMAGE_TAG=v0.1.0`；`latest` 只用于本地试用。
+
+版本化安装示例：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/v0.1.0/deploy/install.sh -o install.sh
+```
+
 ## 1. 准备目录
 
 ```bash
@@ -19,6 +27,12 @@ chmod +x install.sh
 - `redis_data/`
 
 已存在 `.env` 时不会覆盖用户已有值，只会补齐空的 `POSTGRES_PASSWORD`、`JWT_SECRET`、`CONFIG_ENCRYPTION_KEY`。
+
+`install.sh` 默认会把 `docker-compose.local.yml` 安装为 `docker-compose.yml`，作为推荐的 PostgreSQL + Redis + 本地目录部署方式。当前目录已经存在 `.env`、`docker-compose.yml`、`data/`、`postgres_data/` 或 `redis_data/` 时会先要求确认；已有 `docker-compose.yml` 会备份为 `docker-compose.yml.bak.*` 后再安装默认模板。确实需要保留自定义 compose 时可执行：
+
+```bash
+PCC_INSTALL_KEEP_COMPOSE=true ./install.sh
+```
 
 `SERVER_MODE=release` 会强制要求 `JWT_SECRET` 和 `CONFIG_ENCRYPTION_KEY` 为非空随机值。手动维护 `.env` 时可用以下命令生成：
 
@@ -104,6 +118,9 @@ cp docker-compose.host.yml docker-compose.yml
 docker compose up -d
 ```
 
+`docker-compose.host.yml` 会把 Redis 绑定到宿主机 `127.0.0.1:6379`，因此 `REDIS_PASSWORD` 不能为空；为空时 Redis 容器会直接退出并提示补齐密码。
+该模板会设置 `NETWORK_MODE=host`，系统设置页会显示“高级网络模式已开启”提示。
+
 ## 5. 反向代理
 
 管理后台建议只监听 `127.0.0.1:8080`，公网访问通过 Caddy 或 Nginx 提供 HTTPS。
@@ -148,8 +165,10 @@ docker compose logs app --tail 100
 
 ```bash
 docker compose exec app proxy-control-center backup create --reason before-update
+sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=v0.1.0/' .env
 docker compose pull
 docker compose up -d
+curl http://127.0.0.1:8080/ready
 ```
 
 如果升级失败：
@@ -160,7 +179,7 @@ docker compose up -d
 
 ## 8. Redis 暴露风险
 
-默认 Redis 不暴露到公网。只有在明确映射 Redis 到宿主机时才允许空密码，否则必须设置：
+默认本地目录版 Redis 只在 Docker 内部网络使用，不映射到宿主机。只有在明确映射 Redis 到宿主机时，必须设置：
 
 ```env
 REDIS_PASSWORD=<strong-password>

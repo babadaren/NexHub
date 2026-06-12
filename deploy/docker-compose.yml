@@ -3,6 +3,7 @@ x-app-environment: &app-environment
   SERVER_HOST: "0.0.0.0"
   SERVER_PORT: "8080"
   SERVER_MODE: "${SERVER_MODE:-release}"
+  NETWORK_MODE: "${NETWORK_MODE:-bridge}"
   PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
   DATA_DIR: "/app/data"
   STORAGE_DRIVER: "json"

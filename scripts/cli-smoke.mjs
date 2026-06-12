@@ -16,6 +16,7 @@ function run(args, extraEnv = {}) {
         ADMIN_PASSWORD: "admin12345",
         JWT_SECRET: "cli-smoke-secret",
         CONFIG_ENCRYPTION_KEY: "cli-smoke-encryption-key",
+        NETWORK_MODE: "bridge",
         ...extraEnv
       },
       stdio: ["ignore", "pipe", "pipe"]
@@ -42,6 +43,7 @@ function runExpectFailure(args, extraEnv = {}) {
         ADMIN_PASSWORD: "admin12345",
         JWT_SECRET: "cli-smoke-secret",
         CONFIG_ENCRYPTION_KEY: "cli-smoke-encryption-key",
+        NETWORK_MODE: "bridge",
         ...extraEnv
       },
       stdio: ["ignore", "pipe", "pipe"]
@@ -69,6 +71,13 @@ try {
   }
   if (status.deployment.mode !== "development" || status.deployment.releaseMode !== false || status.deployment.app !== "ok" || status.deployment.engine !== "ok") {
     throw new Error(`system status did not include expected server mode: ${JSON.stringify(status.deployment)}`);
+  }
+  if (status.deployment.networkMode !== "bridge" || status.deployment.advancedNetwork !== false) {
+    throw new Error(`system status did not include expected network mode: ${JSON.stringify(status.deployment)}`);
+  }
+  const hostNetworkStatus = JSON.parse(await run(["system", "status"], { NETWORK_MODE: "host" }));
+  if (hostNetworkStatus.deployment.networkMode !== "host" || hostNetworkStatus.deployment.advancedNetwork !== true) {
+    throw new Error(`system status did not expose host network mode: ${JSON.stringify(hostNetworkStatus.deployment)}`);
   }
   const staleBackupDir = path.join(dataDir, "backups", "backup-2000-01-01T00-00-00.000Z.json");
   await mkdir(staleBackupDir, { recursive: true });

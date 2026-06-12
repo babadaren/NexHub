@@ -72,6 +72,9 @@ function initialState(): AppState {
         realtimeTtlHours: config.realtimeTtlHours,
         dailySummaryDays: 180
       },
+      security: {
+        allowPrivateSubscriptions: config.subscriptionAllowPrivateNetwork
+      },
       deployment: {
         app: "running",
         postgres: "configured",
@@ -94,6 +97,7 @@ export class JsonStore {
     } else {
       await this.loadJson();
     }
+    this.normalizeSettings();
     this.normalizeSubscriptionSources();
     this.normalizeNodeMetadata();
     this.migrateLegacyShareTokens();
@@ -177,6 +181,13 @@ export class JsonStore {
     if (changed) void this.save();
   }
 
+  private normalizeSettings() {
+    const state = this.snapshot();
+    const before = JSON.stringify(state.settings ?? {});
+    state.settings = normalizeSystemSettings(state.settings);
+    if (JSON.stringify(state.settings ?? {}) !== before) void this.save();
+  }
+
   private normalizeNodeMetadata() {
     const state = this.snapshot();
     let changed = false;
@@ -207,29 +218,55 @@ export class JsonStore {
     restored.nodeConfigVersions = restored.nodeConfigVersions ?? [];
     restored.shareTokens = restored.shareTokens ?? [];
     restored.backupJobs = restored.backupJobs ?? [];
+    restored.settings = normalizeSystemSettings(restored.settings);
     restored.nodes = restored.nodes.map((node) => ({
       ...node,
       sourceMissing: Boolean(node.sourceMissing)
     }));
+    const previousState = this.state;
     this.state = restored;
-    this.migrateLegacyShareTokens();
-    this.addAudit("system.restored", "backup", undefined, `从备份恢复：${source}`, {
-      nodes: restored.nodes.length,
-      subscriptions: restored.subscriptions.length
-    });
-    await this.save();
+    try {
+      this.migrateLegacyShareTokens();
+    } finally {
+      this.state = previousState;
+    }
+    const restoredAudit: AuditLog = {
+      id: randomUUID(),
+      action: "system.restored",
+      targetType: "backup",
+      summary: `从备份恢复：${source}`,
+      metadata: {
+        nodes: restored.nodes.length,
+        subscriptions: restored.subscriptions.length
+      },
+      createdAt: now()
+    };
+    restored.auditLogs = [restoredAudit, ...restored.auditLogs].slice(0, 200);
+    if (config.testBackupFailRestorePersist) {
+      throw new Error("模拟恢复状态持久化失败");
+    }
+    await this.saveState(restored);
+    this.state = restored;
     await this.refreshEngineConfig();
     return this.snapshot();
   }
 
+  validateRestorableState(snapshot: unknown) {
+    assertRestorableState(snapshot);
+  }
+
   async save() {
     if (!this.state) return;
+    await this.saveState(this.state);
+  }
+
+  private async saveState(state: AppState) {
     if (this.pool) {
-      await this.writePostgresState(this.state);
+      await this.writePostgresState(state);
       return;
     }
     await mkdir(config.dataDir, { recursive: true });
-    await writeFile(stateFile, JSON.stringify(protectState(this.state), null, 2), "utf8");
+    await writeFile(stateFile, JSON.stringify(protectState(state), null, 2), "utf8");
   }
 
   async ensureAdmin() {
@@ -664,9 +701,11 @@ export class JsonStore {
 
   private async refreshSubscriptionUnlocked(id: string): Promise<ApplyImportResult> {
     const subscription = this.getSubscription(id);
+    const allowPrivateNetwork = subscription ? this.subscriptionPrivateNetworkAllowed(subscription) : false;
     if (!subscription) throw new Error("订阅源不存在");
     try {
-      const input = subscription.content || (subscription.url ? await fetchSubscription(subscription.url, subscription.allowPrivateNetwork) : "");
+      if (config.subscriptionRefreshDelayMs > 0) await sleep(config.subscriptionRefreshDelayMs);
+      const input = subscription.content || (subscription.url ? await fetchSubscription(subscription.url, allowPrivateNetwork) : "");
       if (!input.trim()) throw new Error("订阅内容为空");
       const parsed = parseImport(input);
       const result = await this.applyParsedNodes(parsed, subscription.id);
@@ -701,10 +740,24 @@ export class JsonStore {
       subscription.lastRefreshMessage = message;
       subscription.lastRefreshAt = now();
       subscription.updatedAt = subscription.lastRefreshAt;
-      this.addAudit("subscription.refresh.failed", "subscription", subscription.id, message);
+      this.addAudit("subscription.refresh.failed", "subscription", subscription.id, message, {
+        code: "SUBSCRIPTION_REFRESH_FAILED",
+        sourceType: subscription.sourceType,
+        allowPrivateNetwork: subscription.allowPrivateNetwork,
+        systemAllowPrivateNetwork: this.systemAllowPrivateSubscriptions(),
+        effectiveAllowPrivateNetwork: allowPrivateNetwork
+      });
       await this.save();
       return { status: "failed", created: 0, updated: 0, unchanged: 0, failed: 1, nodes: [], message };
     }
+  }
+
+  private systemAllowPrivateSubscriptions() {
+    return config.subscriptionAllowPrivateNetwork || recordValue(this.snapshot().settings.security).allowPrivateSubscriptions === true;
+  }
+
+  private subscriptionPrivateNetworkAllowed(subscription: SubscriptionSource) {
+    return subscription.allowPrivateNetwork || this.systemAllowPrivateSubscriptions();
   }
 
   private async autoEnableImportedNodes(nodes: NodeConfig[], sourceId: string) {
@@ -1539,6 +1592,20 @@ function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function normalizeSystemSettings(value: unknown): Record<string, unknown> {
+  const settings = recordValue(value);
+  const security = recordValue(settings.security);
+  if (typeof security.allowPrivateSubscriptions !== "boolean") {
+    security.allowPrivateSubscriptions = config.subscriptionAllowPrivateNetwork;
+  }
+  settings.security = security;
+  return settings;
+}
+
 function assertRestorableState(value: unknown): asserts value is AppState {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("备份状态结构无效");
   const state = value as Partial<AppState>;
@@ -1699,6 +1766,7 @@ export function protectState(state: AppState): AppState {
     ...protectedState.settings,
     security: {
       ...(typeof protectedState.settings.security === "object" && protectedState.settings.security ? protectedState.settings.security : {}),
+      allowPrivateSubscriptions: recordValue(protectedState.settings.security).allowPrivateSubscriptions === true,
       encryptionKeyFingerprint: encryptionKeyFingerprint()
     }
   };

@@ -136,7 +136,15 @@ export interface SystemStatus {
   status: "ready" | "degraded";
   ready: boolean;
   version: string;
-  deployment: Record<string, string>;
+  deployment: {
+    app: string;
+    mode: string;
+    networkMode: string;
+    advancedNetwork: boolean;
+    postgres: string;
+    redis: string;
+    engine: string;
+  };
   checks: Record<string, SystemCheck>;
   storage: {
     driver: string;
@@ -190,7 +198,10 @@ export interface SystemSettings {
   };
   deployment?: Record<string, unknown>;
   engine?: Record<string, unknown>;
-  security?: Record<string, unknown>;
+  security?: {
+    allowPrivateSubscriptions?: boolean;
+    [key: string]: unknown;
+  };
 }
 
 export interface InstallStatus {

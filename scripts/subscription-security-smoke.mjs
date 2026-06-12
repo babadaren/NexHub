@@ -79,10 +79,11 @@ async function createAndRefreshSubscription(port, headers, url, extra = {}) {
     headers,
     body: JSON.stringify({ name: `Security ${port}`, url, ...extra })
   });
-  return request(port, `/api/subscriptions/${subscription.id}/refresh`, {
+  const refresh = await request(port, `/api/subscriptions/${subscription.id}/refresh`, {
     method: "POST",
     headers: { Authorization: headers.Authorization }
   });
+  return { subscription, refresh };
 }
 
 async function withBackend(port, env, fn) {
@@ -116,12 +117,40 @@ await listen(subscriptionServer, sourcePort);
 
 try {
   await withBackend(19087, { SUBSCRIPTION_ALLOW_PRIVATE_NETWORK: "false" }, async (auth) => {
-    const result = await createAndRefreshSubscription(19087, auth, `http://127.0.0.1:${sourcePort}/final`);
+    const { subscription, refresh: result } = await createAndRefreshSubscription(19087, auth, `http://127.0.0.1:${sourcePort}/final`);
     if (result.status !== "failed" || !result.message.includes("内网")) {
       throw new Error(`expected private network rejection, got ${JSON.stringify(result)}`);
     }
-    const allowed = await createAndRefreshSubscription(19087, auth, `http://127.0.0.1:${sourcePort}/final`, { allowPrivateNetwork: true });
-    if (allowed.status !== "passed" || allowed.created !== 1) {
+    const events = await request(19087, "/api/dashboard/events", { headers: { Authorization: auth.Authorization } });
+    if (!events.some((event) => event.action === "subscription.refresh.failed" && event.targetId === subscription.id && event.metadata?.code === "SUBSCRIPTION_REFRESH_FAILED")) {
+      throw new Error(`subscription refresh failure audit was not recorded: ${JSON.stringify(events)}`);
+    }
+    const settings = await request(19087, "/api/system/settings", {
+      method: "PATCH",
+      headers: auth,
+      body: JSON.stringify({ security: { allowPrivateSubscriptions: true } })
+    });
+    if (settings.security?.allowPrivateSubscriptions !== true) {
+      throw new Error(`expected private subscription system setting to be enabled, got ${JSON.stringify(settings)}`);
+    }
+    const settingsEvents = await request(19087, "/api/dashboard/events", { headers: { Authorization: auth.Authorization } });
+    if (
+      !settingsEvents.some(
+        (event) =>
+          event.action === "system.settings.updated" &&
+          event.metadata?.allowPrivateSubscriptions === true &&
+          Array.isArray(event.metadata?.keys) &&
+          event.metadata.keys.includes("security")
+      )
+    ) {
+      throw new Error(`system setting audit was not recorded: ${JSON.stringify(settingsEvents)}`);
+    }
+    const { refresh: systemAllowed } = await createAndRefreshSubscription(19087, auth, `http://127.0.0.1:${sourcePort}/final`);
+    if (systemAllowed.status !== "passed" || systemAllowed.nodes.length === 0) {
+      throw new Error(`expected system private network allowance, got ${JSON.stringify(systemAllowed)}`);
+    }
+    const { refresh: allowed } = await createAndRefreshSubscription(19087, auth, `http://127.0.0.1:${sourcePort}/final`, { allowPrivateNetwork: true });
+    if (allowed.status !== "passed" || allowed.nodes.length === 0) {
       throw new Error(`expected per-source private network allowance, got ${JSON.stringify(allowed)}`);
     }
   });
@@ -133,9 +162,13 @@ try {
       SUBSCRIPTION_REDIRECT_LIMIT: "1"
     },
     async (auth) => {
-      const result = await createAndRefreshSubscription(19088, auth, `http://127.0.0.1:${sourcePort}/redirect/0`, { allowPrivateNetwork: true });
+      const { subscription, refresh: result } = await createAndRefreshSubscription(19088, auth, `http://127.0.0.1:${sourcePort}/redirect/0`, { allowPrivateNetwork: true });
       if (result.status !== "failed" || !result.message.includes("重定向次数")) {
         throw new Error(`expected redirect limit failure, got ${JSON.stringify(result)}`);
+      }
+      const events = await request(19088, "/api/dashboard/events", { headers: { Authorization: auth.Authorization } });
+      if (!events.some((event) => event.action === "subscription.refresh.failed" && event.targetId === subscription.id && event.metadata?.code === "SUBSCRIPTION_REFRESH_FAILED")) {
+        throw new Error(`subscription redirect failure audit was not recorded: ${JSON.stringify(events)}`);
       }
     }
   );

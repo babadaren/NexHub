@@ -78,6 +78,19 @@ try {
   if (!lastError.includes("definitely-missing-sing-box")) {
     throw new Error(`expected missing binary error in engine status, got ${lastError}`);
   }
+  const restart = await request("/api/system/restart", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (restart.ok || restart.status !== 400 || !String(restart.body).includes("ENGINE_RESTART_FAILED")) {
+    throw new Error(`expected structured engine restart failure, got ${JSON.stringify(restart)}`);
+  }
+  const events = await request("/api/dashboard/events", {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!events.ok || !events.body.some((event) => event.action === "system.engine.restart.failed" && event.metadata?.code === "ENGINE_RESTART_FAILED")) {
+    throw new Error(`engine restart failure audit was not recorded: ${JSON.stringify(events.body)}`);
+  }
   console.log("engine smoke ok");
 } finally {
   child.kill();

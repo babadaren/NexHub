@@ -17,6 +17,7 @@ export const config = {
   host: process.env.SERVER_HOST ?? "0.0.0.0",
   port: Number(process.env.SERVER_PORT ?? 8080),
   serverMode,
+  networkMode: process.env.NETWORK_MODE ?? "bridge",
   releaseMode: serverMode === "release" || serverMode === "production",
   corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:5173",
   publicBaseUrl: envValue(process.env.PUBLIC_BASE_URL),
@@ -53,9 +54,13 @@ export const config = {
   subscriptionRefreshEnabled: process.env.SUBSCRIPTION_REFRESH_ENABLED === "true",
   subscriptionRefreshCron: process.env.SUBSCRIPTION_REFRESH_CRON ?? "0 3 * * *",
   subscriptionSchedulerIntervalSeconds: Number(process.env.SUBSCRIPTION_SCHEDULER_INTERVAL_SECONDS ?? 60),
+  subscriptionRefreshDelayMs: Number(process.env.SUBSCRIPTION_REFRESH_DELAY_MS ?? 0),
   shareRateLimitPerMinute: Number(process.env.SHARE_RATE_LIMIT_PER_MINUTE ?? 60),
   backupDir: process.env.BACKUP_DIR,
-  backupRetentionDays: Number(process.env.BACKUP_RETENTION_DAYS ?? 30),
+  backupRetentionDays: positiveIntegerEnv(process.env.BACKUP_RETENTION_DAYS, 30),
+  testBackupFailPreRestore: process.env.TEST_BACKUP_FAIL_PRE_RESTORE === "true" && serverMode !== "release" && serverMode !== "production",
+  testBackupFailRestorePersist: process.env.TEST_BACKUP_FAIL_RESTORE_PERSIST === "true" && serverMode !== "release" && serverMode !== "production",
+  testFailRestoreSuccessAudit: process.env.TEST_FAIL_RESTORE_SUCCESS_AUDIT === "true" && serverMode !== "release" && serverMode !== "production",
   logOutputToFile: process.env.LOG_OUTPUT_TO_FILE !== "false",
   logRotationMaxSizeMb: Number(process.env.LOG_ROTATION_MAX_SIZE_MB ?? 100),
   logRotationMaxBackups: Number(process.env.LOG_ROTATION_MAX_BACKUPS ?? 10),
@@ -89,4 +94,9 @@ export function validateStartupConfig() {
 function envValue(value: string | undefined) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function positiveIntegerEnv(value: string | undefined, fallback: number) {
+  const parsed = Number(value ?? fallback);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : fallback;
 }

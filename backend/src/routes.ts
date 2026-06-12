@@ -56,7 +56,19 @@ const subscriptionShape = {
   allowPrivateNetwork: z.boolean().optional()
 };
 
-const subscriptionSchema = z.object(subscriptionShape).refine((body) => Boolean(body.url || body.content), { message: "订阅 URL 和粘贴内容至少填写一个" });
+const subscriptionSchema = z.object(subscriptionShape).superRefine((body, ctx) => {
+  if (body.url || body.content) return;
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ["url"],
+    message: "订阅 URL 和粘贴内容至少填写一个"
+  });
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ["content"],
+    message: "订阅 URL 和粘贴内容至少填写一个"
+  });
+});
 
 const subscriptionPatchSchema = z.object(subscriptionShape).partial().refine((body) => Object.keys(body).length > 0, { message: "至少提交一个字段" });
 
@@ -69,10 +81,18 @@ const systemSettingsPatchSchema = z
         auditLogDays: z.number().int().min(1).max(3650).optional()
       })
       .partial()
+      .optional(),
+    security: z
+      .object({
+        allowPrivateSubscriptions: z.boolean().optional()
+      })
+      .partial()
       .optional()
   })
   .passthrough()
   .refine((body) => Object.keys(body).length > 0, { message: "至少提交一个设置项" });
+
+const passwordPatchSchema = z.object({ password: z.string().min(8) });
 
 function auth(request: FastifyRequest) {
   return request.jwtVerify();
@@ -115,6 +135,15 @@ function recordValue(value: unknown): Record<string, unknown> {
 function numericRecord(value: unknown): Record<string, number> {
   const record = recordValue(value);
   return Object.fromEntries(Object.entries(record).filter(([, item]) => typeof item === "number")) as Record<string, number>;
+}
+
+async function recordNodeOperationFailed(action: string, code: string, node: NodeConfig, message: string, metadata: Record<string, unknown> = {}) {
+  await store.recordAudit(action, "node", node.id, `${node.name} 操作失败：${message}`, {
+    code,
+    direction: node.direction,
+    protocol: node.protocol,
+    ...metadata
+  });
 }
 
 function publicBaseUrl(request: FastifyRequest) {
@@ -299,6 +328,8 @@ async function systemStatus() {
     deployment: {
       app: checks.app.status,
       mode: config.serverMode,
+      networkMode: config.networkMode,
+      advancedNetwork: config.networkMode === "host",
       postgres: store.driver === "postgres" ? checks.database.status : "json-dev",
       redis: redisRuntime.status,
       engine: engineCheck.status
@@ -451,7 +482,14 @@ function directionRoutes(app: FastifyInstance, direction: Direction, prefix: str
       return await store.runTest(node);
     } catch (error) {
       const message = lockConflictMessage(error, "节点正在测试中，请稍后再试");
-      if (message) return conflict(reply, "NODE_TEST_LOCKED", message);
+      if (message) {
+        await store.recordAudit("node.test.locked", "node", id, `节点测试被互斥锁阻止：${node.name}`, {
+          code: "NODE_TEST_LOCKED",
+          direction,
+          protocol: node.protocol
+        });
+        return conflict(reply, "NODE_TEST_LOCKED", message);
+      }
       throw error;
     }
   });
@@ -461,7 +499,11 @@ function directionRoutes(app: FastifyInstance, direction: Direction, prefix: str
     const node = store.getNode(id);
     if (!node || node.direction !== direction) return notFound(reply, "节点不存在");
     const result = await store.enableNode(id);
-    if (!result.ok) return badRequest(reply, "NODE_ENABLE_BLOCKED", result.message ?? "节点不能启用", "请打开节点详情页，按提示补齐配置或改用已映射端口后再启用。");
+    if (!result.ok) {
+      const message = result.message ?? "节点不能启用";
+      await recordNodeOperationFailed("node.enable.failed", "NODE_ENABLE_BLOCKED", node, message);
+      return badRequest(reply, "NODE_ENABLE_BLOCKED", message, "请打开节点详情页，按提示补齐配置或改用已映射端口后再启用。");
+    }
     await store.recordAudit("node.enabled", "node", id, `启用节点 ${node.name}`, { direction, protocol: node.protocol });
     return result.node;
   });
@@ -542,19 +584,25 @@ export async function registerRoutes(app: FastifyInstance) {
     };
   });
 
-  app.patch("/api/admin/password", { preHandler: auth }, async (request) => {
-    const body = z.object({ password: z.string().min(8) }).parse(request.body);
+  const changePasswordHandler = async (request: FastifyRequest) => {
+    const body = passwordPatchSchema.parse(request.body);
     await store.changePassword(body.password);
     return { ok: true };
-  });
+  };
+
+  const historySummaryHandler = async (request: FastifyRequest) => {
+    const days = Math.min(Math.max(Number((request.query as { days?: string }).days ?? 14), 7), 180);
+    return historySummary(days);
+  };
+
+  app.patch("/api/admin/password", { preHandler: auth }, changePasswordHandler);
+  app.patch("/api/auth/password", { preHandler: auth }, changePasswordHandler);
 
   app.get("/api/dashboard/summary", { preHandler: auth }, async () => dashboardSummary());
   app.get("/api/dashboard/health", { preHandler: auth }, async () => dashboardSummary().health);
   app.get("/api/dashboard/events", { preHandler: auth }, async () => store.auditLogs());
-  app.get("/api/history/summary", { preHandler: auth }, async (request) => {
-    const days = Math.min(Math.max(Number((request.query as { days?: string }).days ?? 14), 7), 180);
-    return historySummary(days);
-  });
+  app.get("/api/history/summary", { preHandler: auth }, historySummaryHandler);
+  app.get("/api/dashboard/history", { preHandler: auth }, historySummaryHandler);
 
   directionRoutes(app, "remote", "/api/remote-nodes");
   directionRoutes(app, "local", "/api/local-nodes");
@@ -574,7 +622,11 @@ export async function registerRoutes(app: FastifyInstance) {
     const node = store.getNode(id);
     if (!node || node.direction !== "local") return notFound(reply, "节点不存在");
     const result = await store.enableNode(id);
-    if (!result.ok) return badRequest(reply, "LOCAL_NODE_START_BLOCKED", result.message ?? "本地节点不能启动", "请检查本地节点配置和 Docker 端口映射后再启动。");
+    if (!result.ok) {
+      const message = result.message ?? "本地节点不能启动";
+      await recordNodeOperationFailed("node.start.failed", "LOCAL_NODE_START_BLOCKED", node, message);
+      return badRequest(reply, "LOCAL_NODE_START_BLOCKED", message, "请检查本地节点配置和 Docker 端口映射后再启动。");
+    }
     await store.recordAudit("node.started", "node", id, `启动本地节点 ${node.name}`, { protocol: node.protocol });
     return { node: result.node, engine: engineRuntime.getStatus() };
   });
@@ -593,7 +645,11 @@ export async function registerRoutes(app: FastifyInstance) {
     const node = store.getNode(id);
     if (!node || node.direction !== "local") return notFound(reply, "节点不存在");
     const enabled = await store.enableNode(id);
-    if (!enabled.ok) return badRequest(reply, "LOCAL_NODE_RESTART_BLOCKED", enabled.message ?? "本地节点不能重启", "请检查本地节点配置和 Docker 端口映射后再重启。");
+    if (!enabled.ok) {
+      const message = enabled.message ?? "本地节点不能重启";
+      await recordNodeOperationFailed("node.restart.failed", "LOCAL_NODE_RESTART_BLOCKED", node, message);
+      return badRequest(reply, "LOCAL_NODE_RESTART_BLOCKED", message, "请检查本地节点配置和 Docker 端口映射后再重启。");
+    }
     try {
       const latest = enabled.node ?? node;
       const test = await store.runTest(latest);
@@ -601,7 +657,10 @@ export async function registerRoutes(app: FastifyInstance) {
       return { node: store.getNode(id) ?? latest, test, engine: engineRuntime.getStatus() };
     } catch (error) {
       const message = lockConflictMessage(error, "节点正在重启或测试中，请稍后再试");
-      if (message) return conflict(reply, "LOCAL_NODE_RESTART_LOCKED", message);
+      if (message) {
+        await recordNodeOperationFailed("node.restart.locked", "LOCAL_NODE_RESTART_LOCKED", node, message);
+        return conflict(reply, "LOCAL_NODE_RESTART_LOCKED", message);
+      }
       throw error;
     }
   });
@@ -732,12 +791,18 @@ export async function registerRoutes(app: FastifyInstance) {
 
   app.post("/api/subscriptions/:id/refresh", { preHandler: auth }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (!store.getSubscription(id)) return notFound(reply, "订阅源不存在");
+    const subscription = store.getSubscription(id);
+    if (!subscription) return notFound(reply, "订阅源不存在");
     try {
       return await store.refreshSubscription(id);
     } catch (error) {
       const message = lockConflictMessage(error, "订阅正在刷新中，请稍后再试");
-      if (message) return conflict(reply, "SUBSCRIPTION_REFRESH_LOCKED", message);
+      if (message) {
+        await store.recordAudit("subscription.refresh.locked", "subscription", id, `订阅刷新被互斥锁阻止：${subscription.name}`, {
+          code: "SUBSCRIPTION_REFRESH_LOCKED"
+        });
+        return conflict(reply, "SUBSCRIPTION_REFRESH_LOCKED", message);
+      }
       throw error;
     }
   });
@@ -754,8 +819,17 @@ export async function registerRoutes(app: FastifyInstance) {
         ...body.retention
       };
     }
+    if (body.security) {
+      settings.security = {
+        ...recordValue(settings.security),
+        ...body.security
+      };
+    }
     await store.save();
-    await store.recordAudit("system.settings.updated", "system", undefined, "更新系统设置", { keys: Object.keys(body) });
+    await store.recordAudit("system.settings.updated", "system", undefined, "更新系统设置", {
+      keys: Object.keys(body),
+      allowPrivateSubscriptions: recordValue(settings.security).allowPrivateSubscriptions === true
+    });
     return settings;
   });
 
@@ -763,10 +837,23 @@ export async function registerRoutes(app: FastifyInstance) {
 
   app.post("/api/system/backup", { preHandler: auth }, async (request) => {
     const body = z.object({ reason: z.string().optional() }).optional().parse(request.body);
-    const backup = await createBackup(body?.reason ?? "manual");
+    const reason = body?.reason ?? "manual";
+    let backup;
+    try {
+      backup = await createBackup(reason);
+    } catch (error) {
+      if (error instanceof BackupError) {
+        await store.recordAudit("system.backup.failed", "backup", undefined, `创建备份失败：${error.message}`, {
+          code: error.code,
+          reason,
+          suggestion: error.suggestion
+        });
+      }
+      throw error;
+    }
     await store.recordAudit("system.backup.created", "backup", undefined, `创建备份 ${backup.file}`, {
       file: backup.file,
-      reason: body?.reason ?? "manual",
+      reason,
       sizeBytes: backup.sizeBytes
     });
     return backup;
@@ -774,12 +861,40 @@ export async function registerRoutes(app: FastifyInstance) {
 
   app.post("/api/system/backups/:file/restore", { preHandler: auth }, async (request) => {
     const { file } = request.params as { file: string };
-    const result = await restoreBackup(file);
-    await store.recordAudit("system.backup.restored", "backup", undefined, `恢复备份 ${result.file}`, {
-      file: result.file,
-      preRestoreFile: result.preRestoreFile
-    });
-    return result;
+    let result;
+    try {
+      result = await restoreBackup(file);
+    } catch (error) {
+      if (error instanceof BackupError) {
+        await store.recordAudit("system.backup.restore.failed", "backup", undefined, `恢复备份失败：${error.message}`, {
+          code: error.code,
+          file,
+          suggestion: error.suggestion
+        });
+      }
+      throw error;
+    }
+    try {
+      if (config.testFailRestoreSuccessAudit) {
+        throw new Error("simulated restore success audit failure");
+      }
+      await store.recordAudit("system.backup.restored", "backup", undefined, `恢复备份 ${result.file}`, {
+        file: result.file,
+        preRestoreFile: result.preRestoreFile
+      });
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "恢复成功审计写入失败";
+      return {
+        ...result,
+        auditWarning: {
+          code: "RESTORE_AUDIT_WRITE_FAILED",
+          message: "备份已恢复，但恢复成功审计写入失败。",
+          suggestion: "请检查数据库或 state.json 写入权限；当前恢复结果已生效，避免未经确认重复恢复。",
+          detail: message
+        }
+      };
+    }
   });
 
   app.post("/api/system/update-check", { preHandler: auth }, async () => {
@@ -796,10 +911,15 @@ export async function registerRoutes(app: FastifyInstance) {
     try {
       result = await engineRuntime.restart();
     } catch (error) {
+      const message = error instanceof Error ? error.message : "代理核心重启失败";
+      await store.recordAudit("system.engine.restart.failed", "system", undefined, `重启代理核心失败：${message}`, {
+        code: "ENGINE_RESTART_FAILED",
+        message
+      });
       return badRequest(
         reply,
         "ENGINE_RESTART_FAILED",
-        error instanceof Error ? error.message : "代理核心重启失败",
+        message,
         "请查看系统设置中的代理核心状态和 data/logs/engine.log，确认 sing-box 路径、配置和端口占用。"
       );
     }
