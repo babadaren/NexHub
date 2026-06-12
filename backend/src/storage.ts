@@ -207,6 +207,10 @@ export class JsonStore {
     restored.nodeConfigVersions = restored.nodeConfigVersions ?? [];
     restored.shareTokens = restored.shareTokens ?? [];
     restored.backupJobs = restored.backupJobs ?? [];
+    restored.nodes = restored.nodes.map((node) => ({
+      ...node,
+      sourceMissing: Boolean(node.sourceMissing)
+    }));
     this.state = restored;
     this.migrateLegacyShareTokens();
     this.addAudit("system.restored", "backup", undefined, `从备份恢复：${source}`, {
